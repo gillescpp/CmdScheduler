@@ -1,13 +1,10 @@
 package ctrl
 
 import (
-	"CmdScheduler/dal"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
-	"strings"
 
 	"github.com/julienschmidt/httprouter"
 )
@@ -37,75 +34,20 @@ func secMiddleWare(requiredRoles string, handler httprouter.Handle) httprouter.H
 	return handler
 }
 
-// Helpers paging
-
-//variable globale controleur
-var (
-	DefaultRecordPerPage = 25
-	MaxRecordPerPage     = 100
-)
-
-//extractPaging recup element de paging dans le GET
-func extractPaging(r *http.Request) dal.Paging {
-	p := dal.Paging{
-		Page:       1,
-		Sort:       "",
-		RowPerPage: DefaultRecordPerPage,
-	}
-
-	//extraction element de la requete
-	npage, _ := strconv.Atoi(r.Form.Get("page"))  //page num
-	limit, _ := strconv.Atoi(r.Form.Get("limit")) //page num
-	sort := strings.TrimSpace(r.Form.Get("sort"))
-
-	if limit > MaxRecordPerPage {
-		limit = MaxRecordPerPage
-	}
-
-	if npage > 0 {
-		p.Page = npage
-	}
-	if limit > 0 {
-		p.RowPerPage = limit
-	}
-	p.Sort = sort
-
-	return p
-}
-
-//extractFilter recup filtre dans le GET
-func extractFilter(r *http.Request, qSearchOn []string) dal.Filter {
-	f := dal.Filter{
-		ShowDeleted:    false,
-		OtherSQLFilter: "",
-		OnlyThisID:     0,
-	}
-
-	q := strings.TrimSpace(r.Form.Get("q"))     //champ de recherche standard
-	idspec, _ := strconv.Atoi(r.Form.Get("id")) //id en particulier
-	sqlfilter := ""
-
-	if idspec > 0 {
-		sqlfilter += "id = ?" //TODO : integrer tableau de param pou les like
-	} else if len(qSearchOn) > 0 && q != "" {
-		sqlfilter += "("
-		for _, f := range qSearchOn {
-			sqlfilter += f + " like 'qqqqqq'" //TODO : integrer plutot un tableau de param pou les like
-		}
-		sqlfilter += ")"
-	}
-	f.OtherSQLFilter = sqlfilter
-
-	return f
-}
-
 // Helpers pour les réponses API
 
 //writeStdJSONResp output json réponse std
-func writeStdJSONResp(w http.ResponseWriter, code int, payload JSONStdResponse) {
+func writeStdJSONResp(w http.ResponseWriter, code int, payload interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(payload)
+}
+
+//writeStdJSONCreated 201 created
+func writeStdJSONCreated(w http.ResponseWriter, locationURL string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Location", locationURL)
+	w.WriteHeader(http.StatusCreated)
 }
 
 //writeStdJSONBadErrRequest erreur bad request
@@ -137,24 +79,6 @@ func writeStdJSONErrForbidden(w http.ResponseWriter, errMsg string) {
 	writeStdJSONResp(w, http.StatusForbidden, JSONStdResponse{
 		Error:  errMsg,
 		Result: "ERROR",
-	})
-}
-
-//writeStdJSONCreated réponse ok std
-func writeStdJSONCreated(w http.ResponseWriter, id string) {
-	writeStdJSONResp(w, http.StatusCreated, JSONStdResponse{
-		Error:  "",
-		ID:     id,
-		Result: "OK",
-	})
-}
-
-//writeStdJSONAccepted réponse ok std
-func writeStdJSONAccepted(w http.ResponseWriter, id string) {
-	writeStdJSONResp(w, http.StatusAccepted, JSONStdResponse{
-		Error:  "",
-		ID:     id,
-		Result: "OK",
 	})
 }
 

@@ -17,14 +17,64 @@ var (
 	MaxRecordPerPage     = 100
 )
 
+// PagedResponse est un container pour les réponse avec pagin
+type PagedResponse struct {
+	Offset      int `json:"offset"`              // Offset courant
+	Limit       int `json:"limit,omitempty"`     // record par page
+	TotalRecord int `json:"totalRecord"`         // nombre de record total
+	Page        int `json:"page,omitempty"`      // Page courant
+	TotalPage   int `json:"totalPage,omitempty"` // nombre de page
+
+	Data interface{} `json:"data"` //(table de) résultat
+}
+
+// NewPagedResponse init d'un struct PagedResponse
+func NewPagedResponse(data interface{}, offset int, limit int, recordCount int) PagedResponse {
+	var pr PagedResponse
+	pr.Offset = offset
+	pr.Limit = limit
+	pr.TotalRecord = recordCount
+	pr.Data = data
+	if pr.Offset < 0 {
+		pr.Offset = 0
+	}
+	if pr.Limit <= 0 {
+		pr.Limit = 0
+		pr.Page = 1
+		pr.TotalPage = 1
+	}
+	if pr.TotalRecord < 0 {
+		pr.TotalRecord = 0
+	}
+	//page offset 0-9, page 1, limit 10
+	if pr.Limit > 0 {
+		pr.Page = 1
+		pr.TotalPage = 1
+		if pr.TotalRecord > pr.Limit {
+			pr.TotalPage = (pr.TotalRecord / pr.Limit) + 1
+			pr.Page = ((pr.Offset + 1) / pr.TotalRecord) + 1
+		}
+	}
+
+	return pr
+}
+
 // SearchQuery represente les elements de filtre, paging et tri d'une requete
 type SearchQuery struct {
-	Offset  int    //Offset à appliquer
-	Limit   int    //nb record max
-	SQLSort string //requete partie order by
+	Offset  int    // (input) Offset à appliquer
+	Limit   int    // (input) nb record max
+	SQLSort string // (input) requete partie order by
 
-	SQLFilter string        //filtre sql
-	SQLParams []interface{} //champ sort
+	SQLFilter string        //(calculé par NewSearchQueryFromXX) filtre sql
+	SQLParams []interface{} //(calculé par NewSearchQueryFromXX) champ sort
+}
+
+// GetSQLWhere Util where sql
+func (c SearchQuery) GetSQLWhere() string {
+	if c.SQLFilter == "" {
+		return ""
+	}
+	return " where " + c.SQLFilter
 }
 
 // AppendPaging Util gestion du paging
@@ -177,13 +227,12 @@ func NewSearchQueryFromRequest(r *http.Request, structInfo interface{}, FromForm
 			}
 		} else if len(vals) > 0 {
 			//autre champs de filtre : field=...
-			var (
-				fieldMeta *paramSearchQuery
-				dbname    string
-				exists    bool
-			)
-			if fieldMeta, exists = dbfields[pname]; exists && fieldMeta.Searchable {
+			fieldMeta, exists := dbfields[pname]
+			dbname := ""
+			if exists {
 				dbname = fieldMeta.DbName
+			}
+			if dbname == "" {
 				continue
 			}
 
@@ -271,7 +320,11 @@ func NewSearchQueryFromRequest(r *http.Request, structInfo interface{}, FromForm
 				if op != "in" {
 					pval := fieldMeta.StringToType(fval)
 					if pval != nil {
-						pParamsVals = append(pParamsVals, pval)
+						if op == "like" {
+							pParamsVals = append(pParamsVals, "%"+*(pval.(*string))+"%")
+						} else {
+							pParamsVals = append(pParamsVals, pval)
+						}
 					} else {
 						sql = ""
 					}

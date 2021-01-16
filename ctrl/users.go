@@ -3,9 +3,7 @@ package ctrl
 import (
 	"CmdScheduler/dal"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"reflect"
 	"strconv"
 
 	"github.com/julienschmidt/httprouter"
@@ -41,47 +39,92 @@ func apiUserGet(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 //apiUserList handler get /users
 func apiUserList(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 
-	resq := dal.NewSearchQueryFromRequest(r, &dal.DbUser{}, false)
+	searchQ := dal.NewSearchQueryFromRequest(r, &dal.DbUser{}, false)
 
-	fmt.Println(r.URL.RawQuery)
-	fmt.Println(resq.Offset, "limit:", resq.Limit, "sort", resq.SQLSort)
-	fmt.Println(resq.SQLFilter)
-	for _, c := range resq.SQLParams {
-		s := reflect.ValueOf(c).Elem().String()
-		fmt.Printf("%t %v %v", c, c, s)
+	//get liste
+	_, resp, err := dal.UserList(searchQ)
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+	//retour ok
+	writeStdJSONResp(w, http.StatusOK, resp)
+}
+
+//apiUserCreate handler post /users
+//si ok : create 201 (Created and contain an entity, and a Location header.) ou 200
+func apiUserCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	//deserial input
+	var usr dal.DbUser
+	err := json.NewDecoder(r.Body).Decode(&usr)
+	if err != nil {
+		writeStdJSONErrBadRequest(w, err.Error())
+		return
 	}
 
-	//inputs :
-	/*
-		paging := extractPaging(r)
-		filter := extractFilter(r, []string{"login", "name"})
+	err = usr.Validate(true)
+	if err != nil {
+		writeStdJSONErrBadRequest(w, err.Error())
+		return
+	}
 
-		//get liste date
-		usrs, err := dal.UserList(paging, filter)
+	err = dal.UserInsert(&usr, 0) //todo : userid selon session user
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+	//retour ok : 201 created
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Location", r.URL.Path+"/"+strconv.Itoa(usr.ID))
+	w.WriteHeader(http.StatusCreated)
+}
+
+//apiUserPut handler put /users/:id
+func apiUserPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	//deserial input
+	var usr dal.DbUser
+	err := json.NewDecoder(r.Body).Decode(&usr)
+	if err != nil {
+		writeStdJSONErrBadRequest(w, err.Error())
+		return
+	}
+	usr.ID, _ = strconv.Atoi(p.ByName("id"))
+
+	err = usr.Validate(false)
+	if err != nil {
+		writeStdJSONErrBadRequest(w, err.Error())
+		return
+	}
+
+	err = dal.UserUpdate(usr, 0) //todo : userid selon session user +mode admin, use std ne peu maj que son propre usid
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+	//retour ok : 200
+	writeStdJSONOK(w)
+}
+
+//apiUserDelete handler delete /users/:id
+func apiUserDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	usID, _ := strconv.Atoi(p.ByName("id"))
+	if usID <= 0 {
+		writeStdJSONErrBadRequest(w, "invalid id")
+		return
+	}
+
+	usr, err := dal.UserGet(usID)
+	if err != nil {
+		writeStdJSONErrBadRequest(w, err.Error())
+		return
+	}
+	if usr.ID > 0 {
+		err = dal.UserDelete(usr.ID, 0) //todo : userid selon session
 		if err != nil {
 			writeStdJSONErrInternalServer(w, err.Error())
 			return
 		}
-
-		//retour ok
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(usrs)
-	*/
-	json.NewEncoder(w).Encode(nil)
-}
-
-//apiUserCreate handler post /users
-func apiUserCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	fmt.Fprintf(w, "pong")
-}
-
-//apiUserPut handler put /users/:id
-func apiUserPut(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	fmt.Fprintf(w, "pong")
-}
-
-//apiUserDelete handler delete /users/:id
-func apiUserDelete(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	fmt.Fprintf(w, "pong")
+	}
+	//retour ok : 200
+	writeStdJSONOK(w)
 }

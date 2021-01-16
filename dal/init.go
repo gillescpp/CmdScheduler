@@ -112,6 +112,7 @@ func initDbTables() error {
 		id ` + autoinc + `,
 		name VARCHAR(150),
 		login VARCHAR(60),
+		rightlevel int,	-- pour simple de gestion de droit, role établie sur ce level
 		password VARCHAR(60),
 		deleted_at datetime, deleted_by int,
 		created_at datetime, created_by int,
@@ -131,14 +132,36 @@ func initDbTables() error {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
 
+	/////// public key a recup + stockér à l'init pour validation ensuite
+	// agents d'exec
+	sql = `CREATE TABLE ` + tblPrefix + `AGENT (
+		id ` + autoinc + `,
+		host VARCHAR(150),   --host:port/root
+		apikey VARCHAR(260), --api key	
+		deleted_at datetime, deleted_by int,
+		created_at datetime, created_by int,
+		updated_at datetime, updated_by int
+		)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	sql = `CREATE UNIQUE INDEX IDX_AGENT_UNIC_HOST ON ` + tblPrefix + `AGENT(host)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	//type de tache calé sur les attendues agent : CmdTask, URLCheckTask
 	sql = `CREATE TABLE ` + tblPrefix + `TASK (
 			id ` + autoinc + `,
+			lib VARCHAR(100),
 			type VARCHAR(20),
 			timeout INT,
 			log_store VARCHAR(50),
 			cmd VARCHAR(250),
 			args VARCHAR(250),
 			start_in VARCHAR(250),
+			exec_on VARCHAR(250), -- liste des agents autorisé pour l'exec
 			deleted_at datetime, deleted_by int,
 			created_at datetime, created_by int,
 			updated_at datetime, updated_by int
@@ -147,7 +170,124 @@ func initDbTables() error {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
 
-	sql = `CREATE UNIQUE INDEX IDX_TASK_DELETED ON ` + tblPrefix + `TASK(deleted_at)`
+	sql = `CREATE INDEX IDX_TASK_DELETED ON ` + tblPrefix + `TASK(deleted_at)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	//task flow head
+	sql = `CREATE TABLE ` + tblPrefix + `TASKFLOW (
+		id ` + autoinc + `,
+		lib VARCHAR(100),
+		tags VARCHAR(100),
+		deleted_at datetime, deleted_by int,
+		created_at datetime, created_by int,
+		updated_at datetime, updated_by int
+		)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	sql = `CREATE INDEX IDX_TASKFLOW_DELETED ON ` + tblPrefix + `TASKFLOW(deleted_at)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+	sql = `CREATE INDEX IDX_TASKFLOW_LIB ON ` + tblPrefix + `TASKFLOW(lib, tags)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	//task flow detail
+	sql = `CREATE TABLE ` + tblPrefix + `TASKFLOWDETAIL (
+		taskflowid int, idx int,
+		taskid int,				-- tache a executer
+		nexttaskid_ok int,		-- -1=end, 0=next, 1+=goto idx 1+ 
+		nexttaskid_fail int,	-- -1=end, 0=next, 1+=goto idx 1+ 
+		notiffail int,			-- 0=non, 1=oui
+		primary key(taskflowid, idx)
+		)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	//schedule : 1 schedule -> lance 1 taskflow
+	sql = `CREATE TABLE ` + tblPrefix + `SCHED (
+		id ` + autoinc + `,
+		taskflowid int,			-- taskflow lancé
+		err_level int,
+		queueid int,			-- eventuel queue
+		activ int,				-- 1=oui, autre =non
+		last_start datetime,
+		last_stop datetime,
+		last_result int,		-- 1=ok, 0=err
+		last_msg varchar(500),	-- dernier err constaté
+		deleted_at datetime, deleted_by int,
+		created_at datetime, created_by int,
+		updated_at datetime, updated_by int
+		)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	sql = `CREATE INDEX IDX_SCHED_DELETED ON ` + tblPrefix + `SCHED(deleted_at)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+	sql = `CREATE INDEX IDX_SCHED_TFID ON ` + tblPrefix + `SCHED(taskflowid)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	//sched détail
+	sql = `CREATE TABLE ` + tblPrefix + `SCHEDDETAIL (
+		schedid int, idx int,
+		interval int,			-- intervalle en secondes
+		fixedinterval int,		-- 1 pour interval fixe (horaire d'exec fixe)
+		intervalhours varchar(500),		-- plages horaires 08:00:05-10:00:00,14:00:00-18:00:00
+		hours varchar(500),		-- liste horaire d'exec 08:00:05, 10:00:00
+		months varchar(12),		-- mois d'exex format JFMAMJJASOND : "01000100000" ou "*" pour tous
+		weekdays varchar(7),	-- jours d'exex format LMMJVSD : "1111100" ou "*" pour tous
+		monthdays varchar(100),	-- jours du mois sous forme de n° : "1,15", et ou code "1MON, 2TUE, FIRST, LAST" 
+								-- (1er lundi du mois, 2eme mardi du mois, 1e j du mois, dernier j du mois) ou "*" pour tous
+		primary key(schedid, idx)
+		)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	//queue (liste de taskflow a executer)
+	sql = `CREATE TABLE ` + tblPrefix + `QUEUE (
+		id ` + autoinc + `,
+		lib VARCHAR(100),
+		size int,				-- max element dans la queue
+		timeout int,			-- durée max d'une exec au sein de cette queue
+		deleted_at datetime, deleted_by int,
+		created_at datetime, created_by int,
+		updated_at datetime, updated_by int
+		)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	sql = `CREATE UNIQUE INDEX IDX_QUEUE_LIB ON ` + tblPrefix + `QUEUE (lib)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	//tags
+	sql = `CREATE TABLE ` + tblPrefix + `TAG (
+		id ` + autoinc + `,
+		lib VARCHAR(50),
+		tgroup VARCHAR(50),
+		deleted_at datetime, deleted_by int,
+		created_at datetime, created_by int,
+		updated_at datetime, updated_by int
+		)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	sql = `CREATE UNIQUE INDEX IDX_TAG_LIB ON ` + tblPrefix + `TAG (lib, tgroup)`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
