@@ -197,7 +197,9 @@ func initDbTables() error {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
 
-	//task flow detail
+	//TODO : rajouter un idx unique sur lib
+
+	//task flow detail TODO : rajouter un compteur de passe max (nombre de fois ou l'action peut être appelé, pour des schemas de ressais limité en nnombre)
 	sql = `CREATE TABLE ` + tblPrefix + `TASKFLOWDETAIL (
 		taskflowid int, idx int,
 		taskid int,				-- tache a executer
@@ -242,7 +244,6 @@ func initDbTables() error {
 	sql = `CREATE TABLE ` + tblPrefix + `SCHEDDETAIL (
 		schedid int, idx int,
 		interval int,			-- intervalle en secondes
-		fixedinterval int,		-- 1 pour interval fixe (horaire d'exec fixe)
 		intervalhours varchar(500),		-- plages horaires 08:00:05-10:00:00,14:00:00-18:00:00
 		hours varchar(500),		-- liste horaire d'exec 08:00:05, 10:00:00
 		months varchar(12),		-- mois d'exex format JFMAMJJASOND : "01000100000" ou "*" pour tous

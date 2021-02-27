@@ -57,6 +57,7 @@ func TagList(filter SearchQuery) ([]DbTag, PagedResponse, error) {
 	if rows.Err() != nil && rows.Err() != sql.ErrNoRows {
 		return nil, pagedResp, fmt.Errorf("TagList err %w", err)
 	}
+	pagedResp.Data = arr
 
 	return arr, pagedResp, nil
 }

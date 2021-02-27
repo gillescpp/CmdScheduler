@@ -61,7 +61,7 @@ func SchedList(filter SearchQuery) ([]DbSched, PagedResponse, error) {
 			TaskFlowID: int(taskFlowID.Int64),
 			ErrLevel:   int(errLevel.Int64),
 			QueueID:    int(queueID.Int64),
-			Activ:      int(activ.Int64),
+			Activ:      (activ.Int64 > 0),
 			LastStart:  lastStart.Time,
 			LastStop:   lastStop.Time,
 			LastResult: int(lastResult.Int64),
@@ -78,7 +78,7 @@ func SchedList(filter SearchQuery) ([]DbSched, PagedResponse, error) {
 	//detail
 	if len(arr) > 0 {
 		idarr := make([]interface{}, len(arr))
-		q = ` SELECT schedid, idx, interval, fixedinterval, intervalhours, hours, 
+		q = ` SELECT schedid, interval, intervalhours, hours, 
 			months, weekdays, monthdays
 			FROM ` + tblPrefix + `SCHEDDETAIL where schedid in (0`
 		for i := 0; i < len(arr); i++ {
@@ -94,9 +94,7 @@ func SchedList(filter SearchQuery) ([]DbSched, PagedResponse, error) {
 		defer rowsDet.Close()
 		var (
 			schedid       int
-			idx           int
 			interval      sql.NullInt64
-			fixedinterval sql.NullInt64
 			intervalhours sql.NullString
 			hours         sql.NullString
 			months        sql.NullString
@@ -104,15 +102,13 @@ func SchedList(filter SearchQuery) ([]DbSched, PagedResponse, error) {
 			monthdays     sql.NullString
 		)
 		for rowsDet.Next() {
-			err = rowsDet.Scan(&schedid, &idx, &interval, &fixedinterval, &intervalhours,
+			err = rowsDet.Scan(&schedid, &interval, &intervalhours,
 				&hours, &months, &weekdays, &monthdays)
 			if err != nil {
 				return nil, pagedResp, fmt.Errorf("SchedList det scan %w", err)
 			}
 			arr[arrMp[schedid]].Detail = append(arr[arrMp[schedid]].Detail, DbSchedDetail{
-				Idx:           idx,
 				Interval:      int(interval.Int64),
-				FixedInterval: int(fixedinterval.Int64),
 				IntervalHours: intervalhours.String,
 				Hours:         hours.String,
 				Months:        months.String,
@@ -124,6 +120,11 @@ func SchedList(filter SearchQuery) ([]DbSched, PagedResponse, error) {
 			return nil, pagedResp, fmt.Errorf("SchedList det err %w", err)
 		}
 	}
+	//validation pour renseigner les attributs de travail
+	for e := range arr {
+		arr[e].Validate(false)
+	}
+	pagedResp.Data = arr
 
 	return arr, pagedResp, nil
 }
@@ -162,11 +163,15 @@ func SchedUpdate(elm DbSched, usrUpdater int, transaction bool) error {
 		}()
 	}
 
+	activ := 0
+	if elm.Activ && !elm.Deleted {
+		activ = 1
+	}
 	q := `UPDATE ` + tblPrefix + `SCHED SET
 		updated_by = ?, updated_at = ? ` + strDelQ + `
 		, taskflowid = ?, err_level = ?, queueid = ?, activ = ?
 		where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.TaskFlowID, elm.ErrLevel, elm.QueueID, elm.Activ, elm.ID)
+	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.TaskFlowID, elm.ErrLevel, elm.QueueID, activ, elm.ID)
 	if err != nil {
 		return fmt.Errorf("SchedUpdate err %w", err)
 	}
@@ -178,12 +183,11 @@ func SchedUpdate(elm DbSched, usrUpdater int, transaction bool) error {
 		return fmt.Errorf("SchedUpdate err %w", err)
 	}
 
-	q = `INSERT INTO ` + tblPrefix + `SCHEDDETAIL(schedid, idx, interval, fixedinterval, intervalhours
-		, hours, months, weekdays, monthdays) VALUES (?,?,?,?,?,?,?,?,?)`
+	q = `INSERT INTO ` + tblPrefix + `SCHEDDETAIL(schedid, idx, interval, intervalhours
+		, hours, months, weekdays, monthdays) VALUES (?,?,?,?,?,?,?,?)`
 	for i, detail := range elm.Detail {
-		_, err = MainDB.Exec(q, elm.ID, i, detail.Interval, detail.FixedInterval,
-			detail.IntervalHours, detail.Hours, detail.Months, detail.WeekDays,
-			detail.MonthDays)
+		_, err = MainDB.Exec(q, elm.ID, i, detail.Interval, detail.IntervalHours, detail.Hours,
+			detail.Months, detail.WeekDays, detail.MonthDays)
 		if err != nil {
 			return fmt.Errorf("SchedUpdate err %w", err)
 		}

@@ -59,6 +59,7 @@ func QueueList(filter SearchQuery) ([]DbQueue, PagedResponse, error) {
 	if rows.Err() != nil && rows.Err() != sql.ErrNoRows {
 		return nil, pagedResp, fmt.Errorf("QueueList err %w", err)
 	}
+	pagedResp.Data = arr
 
 	return arr, pagedResp, nil
 }

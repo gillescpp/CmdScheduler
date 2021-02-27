@@ -28,7 +28,7 @@ func TaskFlowList(filter SearchQuery) ([]DbTaskFlow, PagedResponse, error) {
 	pagedResp = NewPagedResponse(arr, filter.Offset, filter.Limit, int(nbRow.Int64))
 
 	// listing
-	q := ` SELECT id, lib, tags FROM ` + tblPrefix + `TASKFLOW ` + filter.GetSQLWhere()
+	q := ` SELECT id, lib, tags, deleted_at FROM ` + tblPrefix + `TASKFLOW ` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
 	rows, err := MainDB.Query(q, filter.SQLParams...)
@@ -101,6 +101,7 @@ func TaskFlowList(filter SearchQuery) ([]DbTaskFlow, PagedResponse, error) {
 			return nil, pagedResp, fmt.Errorf("TaskFlowList det err %w", err)
 		}
 	}
+	pagedResp.Data = arr
 
 	return arr, pagedResp, nil
 }
