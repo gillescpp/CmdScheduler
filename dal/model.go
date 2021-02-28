@@ -318,15 +318,16 @@ const (
 // - LastMsg : msg dernier résultat
 // - Detail : liste des planif d'activation
 type DbSched struct {
-	ID         int       `json:"id"`
-	TaskFlowID int       `json:"taskflowid" apiuse:"search,sort" dbfield:"SCHED.taskflowid"`
-	ErrLevel   int       `json:"err_level" apiuse:"search,sort" dbfield:"SCHED.err_level"`
-	QueueID    int       `json:"queueid" apiuse:"search,sort" dbfield:"SCHED.queueid"`
-	Activ      bool      `json:"activ" apiuse:"search,sort" dbfield:"SCHED.activ"`
-	LastStart  time.Time `json:"last_start" apiuse:"search,sort" dbfield:"SCHED.last_start"`
-	LastStop   time.Time `json:"last_stop" apiuse:"search,sort" dbfield:"SCHED.last_stop"`
-	LastResult int       `json:"last_result" apiuse:"search,sort" dbfield:"SCHED.last_result"`
-	LastMsg    string    `json:"last_msg" apiuse:"search,sort" dbfield:"SCHED.last_msg"`
+	ID         int            `json:"id"`
+	TaskFlowID int            `json:"taskflowid" apiuse:"search,sort" dbfield:"SCHED.taskflowid"`
+	ErrLevel   int            `json:"err_level" apiuse:"search,sort" dbfield:"SCHED.err_level"`
+	QueueID    int            `json:"queueid" apiuse:"search,sort" dbfield:"SCHED.queueid"`
+	Activ      bool           `json:"activ" apiuse:"search,sort" dbfield:"SCHED.activ"`
+	LastStart  time.Time      `json:"last_start" apiuse:"search,sort" dbfield:"SCHED.last_start"`
+	LastStop   time.Time      `json:"last_stop" apiuse:"search,sort" dbfield:"SCHED.last_stop"`
+	LastResult int            `json:"last_result" apiuse:"search,sort" dbfield:"SCHED.last_result"`
+	LastMsg    string         `json:"last_msg" apiuse:"search,sort" dbfield:"SCHED.last_msg"`
+	Zone       *time.Location `json:"-"` //forcé en local pour l'instant mais peut-être a prevoir en bdd ? (si planif depuis client zone diverses ?)
 
 	Detail []DbSchedDetail `json:"detail"`
 
@@ -361,7 +362,7 @@ type DbSchedDetail struct {
 	monthDaysKeywords map[string]bool //1MON=true FIRST=true, etc.
 	monthDaysFirst    bool
 	monthDaysLast     bool
-	//variable de travail pour opti CalcNextLaunch
+	//variable de travail pour opti CalcNextLaunch (et lastCalc pour eviter des retour de valeur identiques)
 	lastValidatedDateLauchFrom time.Time
 	lastValidatedDateLauch     time.Time
 }
@@ -372,6 +373,9 @@ func (c *DbSched) Validate(Create bool) error {
 		return fmt.Errorf("invalid create")
 	} else if !Create && c.ID <= 0 {
 		return fmt.Errorf("invalid id")
+	}
+	if c.Zone == nil {
+		c.Zone = time.Local
 	}
 
 	if !c.Deleted {
@@ -396,7 +400,7 @@ func (c *DbSched) Validate(Create bool) error {
 			return fmt.Errorf("invalid scheduling")
 		}
 		for i := range c.Detail {
-			e := c.Detail[i].Validate(Create)
+			e := c.Detail[i].Validate(Create, c.Zone)
 			if e != nil {
 				return fmt.Errorf("invalid scheduling %v : %v", (i + 1), e)
 			}
@@ -407,12 +411,12 @@ func (c *DbSched) Validate(Create bool) error {
 }
 
 // Validate pour controle de validité
-func (c *DbSchedDetail) Validate(Create bool) error {
+func (c *DbSchedDetail) Validate(Create bool, zone *time.Location) error {
 	if c.Interval > 0 {
 		c.Hours = ""
 		//type interval
 		errv1 := c.ValidateIntervalHours()
-		errv2 := c.CalcDayHours()
+		errv2 := c.CalcDayHours(zone)
 		if errv1 != nil {
 			return fmt.Errorf("invalid IntervalHours : %v", errv1)
 		}
@@ -697,13 +701,13 @@ func (c *DbSchedDetail) ValidateIntervalHours() error {
 }
 
 // CalcDayHours calcules les heures de lancement sur la journée (planfi type intervalle)
-func (c *DbSchedDetail) CalcDayHours() error {
+func (c *DbSchedDetail) CalcDayHours(zone *time.Location) error {
 	c.hours = make([]time.Time, 0)
 	if c.Interval > 0 {
 		//planning de type interval, on crée la liste des heures la journée
 		if len(c.intervalHoursFrom) == 0 {
 			dtCnt := time.Time{}
-			dtEnd := time.Date(0, 0, 1, 0, 0, 0, 0, nil)
+			dtEnd := time.Date(0, 0, 1, 0, 0, 0, 0, zone)
 			for dtCnt.Before(dtEnd) {
 				c.hours = append(c.hours, dtCnt)
 				dtCnt = dtCnt.Add(time.Second * time.Duration(c.Interval))
@@ -728,8 +732,14 @@ func (c *DbSchedDetail) CalcNextLaunch(dtRef time.Time) time.Time {
 	if len(c.hours) == 0 || dtRef.IsZero() {
 		return time.Time{}
 	}
+	//précision : seconde
+	dtRef2 := time.Date(dtRef.Year(), dtRef.Month(), dtRef.Day(), dtRef.Hour(), dtRef.Minute(), dtRef.Second(), 0, dtRef.Location())
+	if dtRef2.Before(dtRef) {
+		dtRef2 = dtRef2.Add(time.Second)
+	}
+	dtRef = dtRef2
 
-	//opti, si CalcNextLaunch est appelé pour le même jour, ce qui arrivera en permence
+	//opti, si CalcNextLaunch est appelé pour le même jour, ce qui arrivera trés frequement
 	//on garde la jour validé en mémoire
 	if c.lastValidatedDateLauchFrom.Day() == dtRef.Day() &&
 		c.lastValidatedDateLauchFrom.Month() == dtRef.Month() &&
@@ -812,14 +822,15 @@ func (c *DbSchedDetail) CalcNextLaunch(dtRef time.Time) time.Time {
 	}
 
 	//recup prochaine heure applicable dans le tableau des heures précalculé
-	if !dtNextValidDay.IsZero() {
+	if dtNextValidDay.IsZero() {
 		return time.Time{}
 	}
+
 	if dtNextValidDay.Day() == dtRef.Day() && dtNextValidDay.Month() == dtRef.Month() && dtNextValidDay.Year() == dtRef.Year() {
-		dtFromHour := time.Date(0, 0, 0, dtRef.Hour(), dtRef.Minute(), dtRef.Second(), 0, dtRef.Location())
-		for h := range c.hours { // hours est trié chrono
+		dtFromHour := time.Date(0, 0, 0, dtRef.Hour(), dtRef.Minute(), dtRef.Second(), 0, time.Local) // TODO zone ?, hours devrait callé sur une zone ???
+		for h := range c.hours {                                                                      // hours est trié chrono
 			if c.hours[h].After(dtFromHour) {
-				return time.Date(dtNextValidDay.Year(), dtNextValidDay.Month(), dtNextValidDay.Day(), dtRef.Hour(), dtRef.Minute(), dtRef.Second(), 0, dtRef.Location())
+				return time.Date(dtNextValidDay.Year(), dtNextValidDay.Month(), dtNextValidDay.Day(), c.hours[h].Hour(), c.hours[h].Minute(), c.hours[h].Second(), 0, dtRef.Location())
 			}
 		}
 	} else if len(c.hours) > 0 {

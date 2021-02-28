@@ -11,9 +11,9 @@ import (
 type DbSchedState struct {
 	dal.DbSched
 
-	NextExec time.Time
-	Running  bool
-	Queued  int
+	NextExec   time.Time
+	Running    bool
+	Queued     int
 	ValidError error
 }
 
@@ -67,7 +67,7 @@ func Start() {
 				updateSchedFromDb(0)
 			}
 			//traitement taches
-			proceedSched()
+			//proceedSched()
 
 		case <-appSched.stopRequestCh:
 			//arret du scheduleur
@@ -119,7 +119,7 @@ func updateSchedFromDb(schedID int) {
 			appSched.schedList[e.ID] = &DbSchedState{
 				DbSched: dal.DbSched{
 					ID:         e.ID,
-					Activ:      (vError==nil),
+					Activ:      (vError == nil),
 					TaskFlowID: e.TaskFlowID,
 					ErrLevel:   e.ErrLevel,
 					QueueID:    e.QueueID,
@@ -151,7 +151,7 @@ func proceedSched(schedID int) {
 	defer appSched.taskMutex.Unlock()
 
 	dtRef := time.Now()
-	
+
 	for _, v := range appSched.schedList {
 		if v.ValidError == nil && !v.Running { //tache non valide non traité
 			if v.NextExec.Before(dtRef) {
@@ -163,15 +163,10 @@ func proceedSched(schedID int) {
 		}
 	}
 
-
-
-	NextExec time.Time
-	Running  bool
-	ValidError error
-
-	
+	/*
+		NextExec time.Time
+		Running  bool
+		ValidError error
+	*/
 
 }
-
-
-

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 )
 
 // const pour le test
@@ -437,7 +438,63 @@ func TestUser(t *testing.T) {
 	}
 }
 
-//TODO : sched
+// TestSched
+func TestSched(t *testing.T) {
+	// jeu de test
+	arr := []testRes{
+		{
+			dataIn: &DbSched{
+				ID:         1,
+				TaskFlowID: 1,
+				ErrLevel:   1,
+				QueueID:    0,
+				Activ:      true,
+				LastStart:  time.Time{},
+				LastStop:   time.Time{},
+				LastResult: 0,
+				LastMsg:    "",
+
+				Detail: []DbSchedDetail{
+					{
+						Interval:      600,
+						IntervalHours: "08:00:00-12:00:00,14:00:00-17:00:00",
+						WeekDays:      "1111100",
+					},
+					{
+						Hours:    "13:00:00,14:00:00",
+						WeekDays: "0111100",
+					},
+				},
+			},
+			//dataOut: &DbTask{
+		},
+	}
+
+	//test calcul
+	dtRef := time.Now()
+	for s, r := range arr {
+		q := r.dataIn.(*DbSched)
+		q.Validate(false)
+
+		for d := range q.Detail {
+			//detail
+			ev := q.Detail[d].Validate(false, q.Zone)
+			if ev != nil {
+				t.Errorf("Err validate %v, d %v : %v", s, d, ev)
+				continue
+			}
+
+			dr := dtRef
+			vals := ""
+			for i := 0; i < 15; i++ {
+				dr = q.Detail[d].CalcNextLaunch(dr)
+				vals += dr.Format("02/01/06@15:04:05 ")
+				dr = dr.Add(time.Second)
+			}
+			fmt.Println(fmt.Sprintf("Sched %v, d %v, next lauch = %v", s, d, vals))
+		}
+	}
+}
 
 // TestMain main test
 func TestMain(m *testing.M) {
