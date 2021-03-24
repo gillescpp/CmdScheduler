@@ -107,12 +107,14 @@ func initDbTables() error {
 	// note : protection des nom de colonne non portable `` pour mysql, [] pour mssql
 	// donc pas d'espace dans les nom de champs et table
 	// rajout de versionedDML a faire en dessous des autres
+
+	// USER, rightlevel indique un niveau de droit (system de droit basique)
 	iv := 1
 	sql := `CREATE ` + tblPrefix + `TABLE USER (
 		id ` + autoinc + `,
 		name VARCHAR(150),
 		login VARCHAR(60),
-		rightlevel int,	-- pour simple de gestion de droit, role établie sur ce level
+		rightlevel int,	
 		password VARCHAR(60),
 		deleted_at datetime, deleted_by int,
 		created_at datetime, created_by int,
@@ -166,7 +168,7 @@ func initDbTables() error {
 			created_at datetime, created_by int,
 			updated_at datetime, updated_by int
 			)`
-	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil { /////////////////// todo virer les com dans les code sql
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
 
@@ -292,6 +294,15 @@ func initDbTables() error {
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
+
+	// ajout time zone
+	sql = `ALTER TABLE ` + tblPrefix + `SCHED ADD time_zone varchar(50)`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
+	//////////////////TODO besoin d'un état des tache en cours (id des travaux en cours sur les agents..., schedule ephemere des instant start...)
+	///todo : code coul pour les tags et groupe de tags, ordre tags ?
 
 	return nil
 }

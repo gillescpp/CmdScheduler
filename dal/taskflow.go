@@ -157,8 +157,8 @@ func TaskFlowUpdate(elm DbTaskFlow, usrUpdater int, transaction bool) error {
 
 	q = `INSERT INTO ` + tblPrefix + `TASKFLOWDETAIL(taskflowid, idx, taskid, nexttaskid_ok, nexttaskid_fail
 		, notiffail) VALUES (?,?,?,?,?,?)`
-	for i, detail := range elm.Detail {
-		_, err = MainDB.Exec(q, elm.ID, i, detail.Idx, detail.TaskID,
+	for _, detail := range elm.Detail {
+		_, err = MainDB.Exec(q, elm.ID, detail.Idx, detail.TaskID,
 			detail.NextTaskIDOK, detail.NextTaskIDFail, detail.NotifFail)
 		if err != nil {
 			return fmt.Errorf("TaskFlowUpdate err %w", err)

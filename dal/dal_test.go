@@ -441,6 +441,7 @@ func TestUser(t *testing.T) {
 // TestSched
 func TestSched(t *testing.T) {
 	// jeu de test
+	tz := time.Local
 	arr := []testRes{
 		{
 			dataIn: &DbSched{
@@ -453,16 +454,18 @@ func TestSched(t *testing.T) {
 				LastStop:   time.Time{},
 				LastResult: 0,
 				LastMsg:    "",
+				zone:       tz,
 
 				Detail: []DbSchedDetail{
 					{
-						Interval:      600,
-						IntervalHours: "08:00:00-12:00:00,14:00:00-17:00:00",
-						WeekDays:      "1111100",
+						Interval:      7200,
+						IntervalHours: "08:00:00-09:00:00",
+						MonthDays:     "1MON, 1TUE",
 					},
 					{
-						Hours:    "13:00:00,14:00:00",
-						WeekDays: "0111100",
+						Hours:     "11:00:00",
+						MonthDays: "FIRST",
+						Months:    "110000000000",
 					},
 				},
 			},
@@ -478,20 +481,22 @@ func TestSched(t *testing.T) {
 
 		for d := range q.Detail {
 			//detail
-			ev := q.Detail[d].Validate(false, q.Zone)
+			ev := q.Detail[d].Validate(false, tz)
 			if ev != nil {
 				t.Errorf("Err validate %v, d %v : %v", s, d, ev)
 				continue
 			}
 
 			dr := dtRef
-			vals := ""
 			for i := 0; i < 15; i++ {
 				dr = q.Detail[d].CalcNextLaunch(dr)
-				vals += dr.Format("02/01/06@15:04:05 ")
+				if dr.IsZero() {
+					fmt.Println(fmt.Sprintf("Sched %v, d %v INACTIF", s, d))
+					break
+				}
+				fmt.Println(fmt.Sprintf("Sched %v, d %v, next lauch = %v", s, d, dr.Format(time.RFC850)))
 				dr = dr.Add(time.Second)
 			}
-			fmt.Println(fmt.Sprintf("Sched %v, d %v, next lauch = %v", s, d, vals))
 		}
 	}
 }

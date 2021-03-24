@@ -2,6 +2,7 @@ package ctrl
 
 import (
 	"CmdScheduler/dal"
+	"CmdScheduler/schd"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -70,6 +71,10 @@ func apiTaskCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) 
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
 	}
+
+	//notif sched
+	schd.UpdateSchedFromDb("DbTask", elm.ID)
+
 	//retour ok : 201 created
 	writeStdJSONCreated(w, r.URL.Path+"/"+strconv.Itoa(elm.ID))
 }
@@ -96,6 +101,10 @@ func apiTaskPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
 	}
+
+	//notif sched
+	schd.UpdateSchedFromDb("DbTask", elm.ID)
+
 	//retour ok : 200
 	writeStdJSONOK(w)
 }
@@ -119,6 +128,8 @@ func apiTaskDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 			writeStdJSONErrInternalServer(w, err.Error())
 			return
 		}
+		//notif sched
+		schd.UpdateSchedFromDb("DbTask", elm.ID)
 	}
 	//retour ok : 200
 	writeStdJSONOK(w)

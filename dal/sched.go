@@ -245,6 +245,7 @@ func SchedInsert(elm *DbSched, usrUpdater int) error {
 	if err != nil {
 		return fmt.Errorf("SchedInsert err %w", err)
 	}
+
 	return nil
 }
 

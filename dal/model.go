@@ -313,21 +313,22 @@ const (
 // - ErrLevel : code gestion d'erreur
 // - QueueID : si soumis à une queue donnée
 // - Activ : flag activation
-// - LastStart / LastStop : plage dernier fonctionnement
+// - LastStart / LastStop : plage dernier fonctionnement (UTC)
 // - LastResult : cf. SchedRes
 // - LastMsg : msg dernier résultat
 // - Detail : liste des planif d'activation
 type DbSched struct {
-	ID         int            `json:"id"`
-	TaskFlowID int            `json:"taskflowid" apiuse:"search,sort" dbfield:"SCHED.taskflowid"`
-	ErrLevel   int            `json:"err_level" apiuse:"search,sort" dbfield:"SCHED.err_level"`
-	QueueID    int            `json:"queueid" apiuse:"search,sort" dbfield:"SCHED.queueid"`
-	Activ      bool           `json:"activ" apiuse:"search,sort" dbfield:"SCHED.activ"`
-	LastStart  time.Time      `json:"last_start" apiuse:"search,sort" dbfield:"SCHED.last_start"`
-	LastStop   time.Time      `json:"last_stop" apiuse:"search,sort" dbfield:"SCHED.last_stop"`
-	LastResult int            `json:"last_result" apiuse:"search,sort" dbfield:"SCHED.last_result"`
-	LastMsg    string         `json:"last_msg" apiuse:"search,sort" dbfield:"SCHED.last_msg"`
-	Zone       *time.Location `json:"-"` //forcé en local pour l'instant mais peut-être a prevoir en bdd ? (si planif depuis client zone diverses ?)
+	ID         int       `json:"id"`
+	TaskFlowID int       `json:"taskflowid" apiuse:"search,sort" dbfield:"SCHED.taskflowid"`
+	ErrLevel   int       `json:"err_level" apiuse:"search,sort" dbfield:"SCHED.err_level"`
+	QueueID    int       `json:"queueid" apiuse:"search,sort" dbfield:"SCHED.queueid"`
+	Activ      bool      `json:"activ" apiuse:"search,sort" dbfield:"SCHED.activ"`
+	LastStart  time.Time `json:"last_start" apiuse:"search,sort" dbfield:"SCHED.last_start"`
+	LastStop   time.Time `json:"last_stop" apiuse:"search,sort" dbfield:"SCHED.last_stop"`
+	LastResult int       `json:"last_result" apiuse:"search,sort" dbfield:"SCHED.last_result"`
+	LastMsg    string    `json:"last_msg" apiuse:"search,sort" dbfield:"SCHED.last_msg"`
+	TimeZone   string    `json:"time_zone" apiuse:"search,sort" dbfield:"SCHED.time_zone"`
+	zone       *time.Location
 
 	Detail []DbSchedDetail `json:"detail"`
 
@@ -336,12 +337,13 @@ type DbSched struct {
 
 // DbSchedDetail détail activation sched
 // - Interval : 0 si prog horaire fixe, ou tps en seconde pour type intervalle
-// - IntervalHours : plages horaires 08:00:05-10:00:00,14:00:00-18:00:00 appliqu" pour un type interval
+// - IntervalHours : plages horaires 08:00:05-10:00:00,14:00:00-18:00:00 appliqué pour un type interval
 // - Hours : liste horaire d'exec 08:00:05, 10:00:00 (shed type heure fixe)
 // - Months : mois d'exex format JFMAMJJASOND : "01000100000" ou "*" pour tous
 // - WeekDays : jours d'exex format LMMJVSD : "1111100" ou "*" pour tous
 // - MonthDays : jours du mois sous forme de n° : "1,15", et ou code "1MON, 2TUE, FIRST, LAST"
 //               (1er lundi du mois, 2eme mardi du mois, 1e j du mois, dernier j du mois) ou "*" pour tous
+// Toutes les dates heures sont dans la tz fourni à la création
 type DbSchedDetail struct {
 	Interval      int    `json:"interval,omitempty" dbfield:"TASKFLOWDETAIL.interval"`
 	IntervalHours string `json:"intervalhours,omitempty" dbfield:"TASKFLOWDETAIL.intervalhours"`
@@ -350,6 +352,7 @@ type DbSchedDetail struct {
 	WeekDays      string `json:"weekdays" dbfield:"TASKFLOWDETAIL.weekdays"`
 	MonthDays     string `json:"monthdays" dbfield:"TASKFLOWDETAIL.monthdays"`
 
+	zone *time.Location //rappel tz paren
 	//intervalHours valeurs deserialisé : pair from->to
 	intervalHoursFrom []time.Time
 	intervalHoursTo   []time.Time
@@ -358,13 +361,12 @@ type DbSchedDetail struct {
 	months   [12]bool
 	weekDays [7]bool
 	//deserial MonthDays
+	monthDaysFilter   bool
 	monthDaysDays     [31]bool
+	monthDaysDaysSet  bool
 	monthDaysKeywords map[string]bool //1MON=true FIRST=true, etc.
 	monthDaysFirst    bool
 	monthDaysLast     bool
-	//variable de travail pour opti CalcNextLaunch (et lastCalc pour eviter des retour de valeur identiques)
-	lastValidatedDateLauchFrom time.Time
-	lastValidatedDateLauch     time.Time
 }
 
 // Validate pour controle de validité
@@ -374,9 +376,15 @@ func (c *DbSched) Validate(Create bool) error {
 	} else if !Create && c.ID <= 0 {
 		return fmt.Errorf("invalid id")
 	}
-	if c.Zone == nil {
-		c.Zone = time.Local
+
+	//qualif tz
+	if c.TimeZone != "" {
+		c.zone, _ = time.LoadLocation(c.TimeZone)
 	}
+	if c.zone == nil {
+		c.zone = time.Local
+	}
+	c.TimeZone = c.zone.String()
 
 	if !c.Deleted {
 		task, _ := TaskGet(c.TaskFlowID)
@@ -400,7 +408,7 @@ func (c *DbSched) Validate(Create bool) error {
 			return fmt.Errorf("invalid scheduling")
 		}
 		for i := range c.Detail {
-			e := c.Detail[i].Validate(Create, c.Zone)
+			e := c.Detail[i].Validate(Create, c.zone)
 			if e != nil {
 				return fmt.Errorf("invalid scheduling %v : %v", (i + 1), e)
 			}
@@ -410,13 +418,30 @@ func (c *DbSched) Validate(Create bool) error {
 	return nil
 }
 
+// CalcNextLaunch calcul prochaine heure d'exe > à dtRef
+func (c *DbSched) CalcNextLaunch(dtRef time.Time) time.Time {
+	if dtRef.IsZero() {
+		return time.Time{}
+	}
+
+	dtRet := time.Time{}
+	for i := range c.Detail {
+		dtDet := c.Detail[i].CalcNextLaunch(dtRef)
+		if !dtDet.IsZero() && (dtRet.IsZero() || dtDet.Before(dtRet)) {
+			dtRet = dtDet
+		}
+	}
+	return dtRet
+}
+
 // Validate pour controle de validité
 func (c *DbSchedDetail) Validate(Create bool, zone *time.Location) error {
+	c.zone = zone
 	if c.Interval > 0 {
 		c.Hours = ""
 		//type interval
 		errv1 := c.ValidateIntervalHours()
-		errv2 := c.CalcDayHours(zone)
+		errv2 := c.CalcDayHours()
 		if errv1 != nil {
 			return fmt.Errorf("invalid IntervalHours : %v", errv1)
 		}
@@ -436,8 +461,6 @@ func (c *DbSchedDetail) Validate(Create bool, zone *time.Location) error {
 		}
 	}
 	//commun au deux type
-	c.lastValidatedDateLauch = time.Time{}
-	c.lastValidatedDateLauchFrom = time.Time{}
 	errv1 := c.ValidateWeekDays()
 	errv2 := c.ValidateMonthDays()
 	errv3 := c.ValidateMonths()
@@ -462,7 +485,7 @@ func (c *DbSchedDetail) ValidateHours() error {
 	lst := strings.Split(c.Hours, ",")
 	elms := make(map[time.Time]bool) //pour dédoublage
 	for _, e := range lst {
-		t, ep := time.Parse(hformat, e)
+		t, ep := time.ParseInLocation(hformat, e, c.zone)
 
 		if ep != nil {
 			errs = append(errs, e+" : parse fail")
@@ -552,24 +575,29 @@ func (c *DbSchedDetail) ValidateMonthDays() error {
 	if c.MonthDays == "" {
 		c.MonthDays = "*"
 	}
-	bAllCheck := (c.MonthDays == "*")
-	for i := 0; i < 31; i++ {
-		c.monthDaysDays[i] = bAllCheck
-	}
+	c.monthDaysDaysSet = false
 	c.monthDaysKeywords = make(map[string]bool)
 	c.monthDaysFirst = false
 	c.monthDaysLast = false
+	c.monthDaysFilter = !(c.MonthDays == "*")
 
-	if !bAllCheck {
+	if c.monthDaysFilter {
+		for i := 0; i < 31; i++ {
+			c.monthDaysDays[i] = false
+		}
+
 		//desialise des elements
+		bFilter := false                        //au moins 1 filtre valide rencontré
 		elms := strings.Split(c.MonthDays, ",") //1,31,1MON....
 
 		for _, e := range elms {
 			// FIRST, LAST
 			if e == "FIRST" {
 				c.monthDaysFirst = true
+				bFilter = true
 			} else if e == "LAST" {
 				c.monthDaysLast = true
+				bFilter = true
 			} else if len(e) == 4 {
 				//format (1-4)MON, 1TUE, 1WED, 1THU, 1FRI, 1SAT, 1SUN
 				n, _ := strconv.Atoi(string(e[0])) //n°
@@ -578,18 +606,26 @@ func (c *DbSchedDetail) ValidateMonthDays() error {
 					d == "THU" || d == "FRI" || d == "SAT" || d == "SUN") {
 					if _, exist := c.monthDaysKeywords[e]; !exist {
 						c.monthDaysKeywords[e] = true
+						bFilter = true
 					}
 				}
 			} else {
 				nd, _ := strconv.Atoi(e) //n° de jour
 				if nd > 0 && nd < 32 {
-					c.monthDaysDays[nd] = true
+					c.monthDaysDays[nd-1] = true
+					c.monthDaysDaysSet = true
+					bFilter = true
 				}
 			}
 		}
+		c.monthDaysFilter = bFilter
+	}
 
-		//rebuild v texte
-		clean := ""
+	//rebuild v texte
+	clean := ""
+	if !c.monthDaysFilter {
+		clean = "*"
+	} else {
 		if c.monthDaysFirst {
 			clean += "FIRST,"
 		}
@@ -599,7 +635,7 @@ func (c *DbSchedDetail) ValidateMonthDays() error {
 		for v := range c.monthDaysKeywords {
 			clean += (v + ",")
 		}
-		for i := 0; i < 31; i++ {
+		for i := 0; c.monthDaysDaysSet && i < 31; i++ {
 			if c.monthDaysDays[i] {
 				clean += strconv.Itoa(i+1) + ","
 			}
@@ -607,11 +643,8 @@ func (c *DbSchedDetail) ValidateMonthDays() error {
 		if len(clean) > 1 {
 			clean = clean[0 : len(clean)-1]
 		}
-		if clean == "" {
-			clean = "*"
-		}
-		c.MonthDays = clean
 	}
+	c.MonthDays = clean
 
 	return nil
 }
@@ -637,8 +670,8 @@ func (c *DbSchedDetail) ValidateIntervalHours() error {
 		if len(lst) != 2 {
 			errs = append(errs, e+" : invalid")
 		} else {
-			t1, e1 := time.Parse(hformat, lst[0])
-			t2, e2 := time.Parse(hformat, lst[1])
+			t1, e1 := time.ParseInLocation(hformat, lst[0], c.zone)
+			t2, e2 := time.ParseInLocation(hformat, lst[1], c.zone)
 			if e1 != nil || e2 != nil {
 				errs = append(errs, e+" : parse fail")
 			} else if t2.Sub(t1).Seconds() > 0 { // la plage doit être > à 1s
@@ -701,13 +734,13 @@ func (c *DbSchedDetail) ValidateIntervalHours() error {
 }
 
 // CalcDayHours calcules les heures de lancement sur la journée (planfi type intervalle)
-func (c *DbSchedDetail) CalcDayHours(zone *time.Location) error {
+func (c *DbSchedDetail) CalcDayHours() error {
 	c.hours = make([]time.Time, 0)
 	if c.Interval > 0 {
 		//planning de type interval, on crée la liste des heures la journée
 		if len(c.intervalHoursFrom) == 0 {
-			dtCnt := time.Time{}
-			dtEnd := time.Date(0, 0, 1, 0, 0, 0, 0, zone)
+			dtCnt := time.Date(0, 1, 1, 0, 0, 0, 0, c.zone)
+			dtEnd := time.Date(0, 1, 2, 0, 0, 0, 0, c.zone)
 			for dtCnt.Before(dtEnd) {
 				c.hours = append(c.hours, dtCnt)
 				dtCnt = dtCnt.Add(time.Second * time.Duration(c.Interval))
@@ -728,28 +761,20 @@ func (c *DbSchedDetail) CalcDayHours(zone *time.Location) error {
 
 // CalcNextLaunch calcul prochaine heure d'exe > à dtRef
 func (c *DbSchedDetail) CalcNextLaunch(dtRef time.Time) time.Time {
-	dtNextValidDay := time.Time{}
 	if len(c.hours) == 0 || dtRef.IsZero() {
 		return time.Time{}
 	}
 	//précision : seconde
-	dtRef2 := time.Date(dtRef.Year(), dtRef.Month(), dtRef.Day(), dtRef.Hour(), dtRef.Minute(), dtRef.Second(), 0, dtRef.Location())
+	dtRef = dtRef.In(c.zone) //conv en tz du sched
+	dtRef2 := time.Date(dtRef.Year(), dtRef.Month(), dtRef.Day(), dtRef.Hour(), dtRef.Minute(), dtRef.Second(), 0, c.zone)
 	if dtRef2.Before(dtRef) {
 		dtRef2 = dtRef2.Add(time.Second)
 	}
 	dtRef = dtRef2
 
-	//opti, si CalcNextLaunch est appelé pour le même jour, ce qui arrivera trés frequement
-	//on garde la jour validé en mémoire
-	if c.lastValidatedDateLauchFrom.Day() == dtRef.Day() &&
-		c.lastValidatedDateLauchFrom.Month() == dtRef.Month() &&
-		c.lastValidatedDateLauchFrom.Year() == dtRef.Year() {
-		dtNextValidDay = c.lastValidatedDateLauch
-	}
-
 	//recherche prochaine jour applicable
-	dtDayTest := time.Date(dtRef.Year(), dtRef.Month(), dtRef.Day(), 0, 0, 0, 0, dtRef.Location())
-	for i := 0; dtNextValidDay.IsZero() && i < 366; i++ { //1 an max
+	dtDayTest := time.Date(dtRef.Year(), dtRef.Month(), dtRef.Day(), 0, 0, 0, 0, c.zone)
+	for i := 0; i < 366; i++ { //1 an max
 		if i > 0 { //nouvelle passe, on repart du lendemai 00:00
 			dtDayTest = dtDayTest.AddDate(0, 0, 1)
 		}
@@ -757,12 +782,12 @@ func (c *DbSchedDetail) CalcNextLaunch(dtRef time.Time) time.Time {
 		bMonthFound := false
 		for m := 0; !bMonthFound; m++ {
 			dtMonth := int(dtDayTest.Month())
-			if c.months[dtMonth] {
+			if c.months[dtMonth-1] {
 				//mois applicable
 				bMonthFound = true
 			} else {
-				//on pousse directement au mois suivant
-				dtDayTest = time.Date(dtDayTest.Year(), time.Month(dtMonth+1), 1, 0, 0, 0, 0, dtDayTest.Location())
+				//on pousse directement au mois suivant (overflow mois 13 géré par la lib std)
+				dtDayTest = time.Date(dtDayTest.Year(), time.Month(dtMonth+1), 1, 0, 0, 0, 0, c.zone)
 			}
 		}
 		if !bMonthFound {
@@ -774,68 +799,46 @@ func (c *DbSchedDetail) CalcNextLaunch(dtRef time.Time) time.Time {
 		if wDay == -1 {                      //Sunday=0-1=-1
 			wDay = 6
 		}
-		mDay := dtDayTest.Day()                                                   // jour du mois
-		firstMonthDay := (mDay == 1)                                              // 1er jour mois
-		lastMonthDay := (dtDayTest.AddDate(0, 0, 1).Month() != dtDayTest.Month()) //dernier jour mois
+		mDay := dtDayTest.Day()                                                                                   // jour du mois
+		firstMonthDay := (mDay == 1)                                                                              // 1er jour mois
+		lastMonthDay := (dtDayTest.AddDate(0, 0, 1).Month() != dtDayTest.Month())                                 //dernier jour mois
+		nj3 := strconv.Itoa(int((float64(dtDayTest.Day())-1.0)/7.0)+1) + strings.ToUpper(dtDayTest.Format("Mon")) //calcul code "1MON", "3TUE"...
 
 		//jour de semaine ko
 		if !c.weekDays[wDay] {
 			continue
 		}
-		//jour du mois ko
-		if !c.monthDaysDays[mDay] {
+
+		// test regle type <n><jour> ex:"1MON" (1 lundi du mois, 2eme mardi du mois...) monthDaysKeywords
+		nj3kExists := false
+		if c.monthDaysFilter && len(c.monthDaysKeywords) > 0 {
+			_, nj3kExists = c.monthDaysKeywords[nj3]
+		}
+
+		// j du mois spécifiquement autorisé, ou 1er/dernier jour du mois, ou code
+		monthDayAllowed := !c.monthDaysFilter ||
+			(c.monthDaysDaysSet && c.monthDaysDays[mDay-1]) ||
+			(c.monthDaysFirst && firstMonthDay) ||
+			(c.monthDaysLast && lastMonthDay) ||
+			nj3kExists
+		if !monthDayAllowed {
 			continue
 		}
-		//1er ou dernier jour du mois ko
-		if (c.monthDaysFirst && !firstMonthDay) || (c.monthDaysLast && !lastMonthDay) {
-			continue
-		}
 
-		// regle type <n><jour> ex:"1MON" (1 lundi du mois, 2eme mardi du mois...)
-		if len(c.monthDaysKeywords) > 0 {
-			//calcul code "1MON" du jour en cours : recup jour du 1 du mois en cours pour déduire les
-			nj := strconv.Itoa(int((float64(dtDayTest.Day())-1.0)/7.0) + 1)
-			switch dtDayTest.Weekday() {
-			case time.Monday:
-				nj += "MON"
-			case time.Tuesday:
-				nj += "TUE"
-			case time.Wednesday:
-				nj += "WED"
-			case time.Thursday:
-				nj += "THU"
-			case time.Friday:
-				nj += "FRI"
-			case time.Saturday:
-				nj += "SAT"
-			case time.Sunday:
-				nj += "SUN"
+		// jour d'exec atteind, on charche l'heure applicable
+		if dtDayTest.Day() == dtRef.Day() && dtDayTest.Month() == dtRef.Month() && dtDayTest.Year() == dtRef.Year() {
+			dtFromHour := time.Date(0, 1, 1, dtRef.Hour(), dtRef.Minute(), dtRef.Second(), 0, c.zone)
+			for h := range c.hours { // hours est trié chrono
+				if c.hours[h].After(dtFromHour) {
+					return time.Date(dtDayTest.Year(), dtDayTest.Month(), dtDayTest.Day(), c.hours[h].Hour(), c.hours[h].Minute(), c.hours[h].Second(), 0, c.zone)
+				}
 			}
-			if v, exists := c.monthDaysKeywords[nj]; !exists || !v {
-				continue
-			}
+			//si plus d'heure pour ce jour, il faut voir sur les jour suivants
+		} else if len(c.hours) > 0 {
+			//si le prochain jour est > à dtRef, alors on repart de minuit et donc de la premiere heure applicable
+			return time.Date(dtDayTest.Year(), dtDayTest.Month(), dtDayTest.Day(), c.hours[0].Hour(), c.hours[0].Minute(), c.hours[0].Second(), 0, c.zone)
 		}
-		// jour d'exec atteind
-		dtNextValidDay = dtDayTest
-		c.lastValidatedDateLauch = dtNextValidDay
-		c.lastValidatedDateLauchFrom = time.Date(dtRef.Year(), dtRef.Month(), dtRef.Day(), 0, 0, 0, 0, dtDayTest.Location())
 	}
 
-	//recup prochaine heure applicable dans le tableau des heures précalculé
-	if dtNextValidDay.IsZero() {
-		return time.Time{}
-	}
-
-	if dtNextValidDay.Day() == dtRef.Day() && dtNextValidDay.Month() == dtRef.Month() && dtNextValidDay.Year() == dtRef.Year() {
-		dtFromHour := time.Date(0, 0, 0, dtRef.Hour(), dtRef.Minute(), dtRef.Second(), 0, time.Local) // TODO zone ?, hours devrait callé sur une zone ???
-		for h := range c.hours {                                                                      // hours est trié chrono
-			if c.hours[h].After(dtFromHour) {
-				return time.Date(dtNextValidDay.Year(), dtNextValidDay.Month(), dtNextValidDay.Day(), c.hours[h].Hour(), c.hours[h].Minute(), c.hours[h].Second(), 0, dtRef.Location())
-			}
-		}
-	} else if len(c.hours) > 0 {
-		//si le prochain jour est > à dtRef, alors on repart de minuit et donc de la premiere heure applicable
-		return time.Date(dtNextValidDay.Year(), dtNextValidDay.Month(), dtNextValidDay.Day(), c.hours[0].Hour(), c.hours[0].Minute(), c.hours[0].Second(), 0, dtRef.Location())
-	}
 	return time.Time{}
 }
