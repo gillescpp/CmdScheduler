@@ -30,11 +30,12 @@ func ListenAndServe(ListenOn string) error {
 	router.DELETE(root+"/users/:id", secMiddleWare("*", apiUserDelete)) //delete (200)
 
 	//CRUD agents
-	router.GET(root+"/agents", secMiddleWare("*", apiAgentList))          //liste (rep 200, 403)
-	router.GET(root+"/agents/:id", secMiddleWare("*", apiAgentGet))       //get item (rep 200, 404 not found, 403)
-	router.POST(root+"/agents", secMiddleWare("*", apiAgentCreate))       //create 201 (Created and contain an entity, and a Location header.) ou 200
-	router.PUT(root+"/agents/:id", secMiddleWare("*", apiAgentPut))       //update (200)
-	router.DELETE(root+"/agents/:id", secMiddleWare("*", apiAgentDelete)) //delete (200)
+	router.GET(root+"/agents", secMiddleWare("*", apiAgentList))           //liste (rep 200, 403)
+	router.GET(root+"/agents/:id", secMiddleWare("*", apiAgentGet))        //get item (rep 200, 404 not found, 403)
+	router.POST(root+"/agents", secMiddleWare("*", apiAgentCreate))        //create 201 (Created and contain an entity, and a Location header.) ou 200
+	router.PUT(root+"/agents/:id", secMiddleWare("*", apiAgentPut))        //update (200)
+	router.DELETE(root+"/agents/:id", secMiddleWare("*", apiAgentDelete))  //delete (200)
+	router.POST(root+"/agents/eval", secMiddleWare("*", apiAgentEvaluate)) //eval d'un agent
 
 	//CRUD queues
 	router.GET(root+"/queues", secMiddleWare("*", apiQueueList))          //liste (rep 200, 403)

@@ -29,7 +29,7 @@ func AgentList(filter SearchQuery) ([]DbAgent, PagedResponse, error) {
 	pagedResp = NewPagedResponse(arr, filter.Offset, filter.Limit, int(nbRow.Int64))
 
 	// listing
-	q := ` SELECT id, host, apikey, deleted_at
+	q := ` SELECT id, host, apikey, certsignallowed, tls, deleted_at
 		FROM ` + tblPrefix + `AGENT ` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
@@ -42,18 +42,22 @@ func AgentList(filter SearchQuery) ([]DbAgent, PagedResponse, error) {
 		id        int
 		host      sql.NullString
 		apikey    sql.NullString
+		certsign  sql.NullString
+		tls       sql.NullInt64
 		deletedAt sql.NullTime
 	)
 	for rows.Next() {
-		err = rows.Scan(&id, &host, &apikey, &deletedAt)
+		err = rows.Scan(&id, &host, &apikey, &certsign, &tls, &deletedAt)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("AgentList scan %w", err)
 		}
 		arr = append(arr, DbAgent{
-			ID:      id,
-			Host:    host.String,
-			APIKey:  apikey.String,
-			Deleted: deletedAt.Valid,
+			ID:              id,
+			Host:            host.String,
+			APIKey:          apikey.String,
+			CertSignAllowed: certsign.String,
+			Tls:             (tls.Int64 == 1),
+			Deleted:         deletedAt.Valid,
 		})
 	}
 	if rows.Err() != nil && rows.Err() != sql.ErrNoRows {
@@ -100,9 +104,13 @@ func AgentUpdate(elm DbAgent, usrUpdater int) error {
 
 	q := `UPDATE ` + tblPrefix + `AGENT SET
 		updated_by = ?, updated_at = ? ` + strDelQ + `
-		, host = ?, apikey = ?
+		, host = ?, apikey = ?, certsignallowed = ?, tls = ?
 		where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Host, elm.APIKey, elm.ID)
+	tls := 0
+	if elm.Tls {
+		tls = 1
+	}
+	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Host, elm.APIKey, elm.CertSignAllowed, tls, elm.ID)
 	if err != nil {
 		return fmt.Errorf("AgentUpdate err %w", err)
 	}

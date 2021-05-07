@@ -134,3 +134,22 @@ func apiAgentDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params)
 	//retour ok : 200
 	writeStdJSONOK(w)
 }
+
+//apiAgentEvaluate permet de tester une agent
+func apiAgentEvaluate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	//deserial input
+	var elm dal.DbAgent
+	err := json.NewDecoder(r.Body).Decode(&elm)
+	if err != nil {
+		writeStdJSONErrBadRequest(w, err.Error())
+		return
+	}
+
+	err = elm.Validate(true)
+	if err != nil {
+		writeStdJSONErrBadRequest(w, err.Error())
+		return
+	}
+
+	writeStdJSONResp(w, http.StatusOK, elm)
+}

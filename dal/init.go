@@ -134,12 +134,13 @@ func initDbTables() error {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
 
-	/////// public key a recup + stockér à l'init pour validation ensuite
 	// agents d'exec
 	sql = `CREATE TABLE ` + tblPrefix + `AGENT (
 		id ` + autoinc + `,
-		host VARCHAR(150),   --host:port/root
-		apikey VARCHAR(260), --api key	
+		host VARCHAR(150),  
+		apikey VARCHAR(260),
+		certsignallowed VARCHAR(512),
+		tls int,
 		deleted_at datetime, deleted_by int,
 		created_at datetime, created_by int,
 		updated_at datetime, updated_by int

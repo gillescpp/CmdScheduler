@@ -4,12 +4,8 @@ import (
 	"CmdScheduler/ctrl"
 	"CmdScheduler/dal"
 	"CmdScheduler/schd"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"log"
-	"net/http"
 	"strconv"
 
 	"github.com/gorilla/securecookie"
@@ -17,63 +13,6 @@ import (
 )
 
 func main() {
-
-	insClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
-	//resp, clientErr := insClient.Get("https://localhost:8800/task/ping")
-	resp, clientErr := insClient.Get("https://www.google.fr")
-	if clientErr != nil {
-		panic(clientErr)
-	}
-	if resp.TLS != nil {
-		certificates := resp.TLS.PeerCertificates
-		if len(certificates) > 0 {
-			// you probably want certificates[0]
-			cert := certificates[0]
-			certSign := hex.EncodeToString(cert.Signature)
-			println("Subject", cert.Subject.String())
-			println("Issuer", cert.Issuer.String())
-
-			publicKeyDer, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
-			if err != nil {
-				panic(err)
-			}
-			certPublicKey := string(pem.EncodeToMemory(&pem.Block{
-				Type:  "PUBLIC KEY",
-				Bytes: publicKeyDer,
-			}))
-
-			println("sign", certSign)
-			println("pk", certPublicKey)
-
-			//unmarshal pub
-			cert1, perr := x509.ParseCertificate(cert.Raw)
-			if perr != nil {
-				panic(err)
-			}
-			certPool := x509.NewCertPool()
-			certPool.AddCert(cert1)
-
-			insClient2 := &http.Client{
-				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{
-						RootCAs: certPool,
-					},
-				},
-			}
-
-			_, clientErr2 := insClient2.Get("https://localhost:8800/task/ping")
-			if clientErr2 != nil {
-				panic(clientErr2)
-			}
-		}
-	}
-	return
-
 	//lecture config
 	err := readConfig()
 	if err != nil {

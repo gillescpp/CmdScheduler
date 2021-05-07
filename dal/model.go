@@ -1,7 +1,12 @@
 package dal
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
@@ -89,10 +94,14 @@ func (c *DbUser) Validate(Create bool) error {
 
 // DbAgent agent
 type DbAgent struct {
-	ID      int    `json:"id"`
-	Host    string `json:"host" apiuse:"search,sort" dbfield:"AGENT.host"`
-	APIKey  string `json:"apikey" apiuse:"search,sort" dbfield:"AGENT.apikey"`
-	Deleted bool   `json:"deleted" apiuse:"search,sort" dbfield:"AGENT.deleted_at"` /// todo pour filtrage des non actif ?
+	ID              int    `json:"id"`
+	Host            string `json:"host" apiuse:"search,sort" dbfield:"AGENT.host"`
+	APIKey          string `json:"apikey" dbfield:"AGENT.apikey"`
+	CertSignAllowed string `json:"certsign" apiuse:"search,sort" dbfield:"AGENT.certsignallowed"`
+	Tls             bool   `json:"tls" dbfield:"AGENT.tls"`
+	EvalResultOK    bool   `json:"evalresult"`
+	EvalResultInfo  string `json:"evalresultinfo"`
+	Deleted         bool   `json:"deleted" apiuse:"search,sort" dbfield:"AGENT.deleted_at"` /// todo pour filtrage des non actif ?
 }
 
 // Validate pour controle de validité
@@ -112,6 +121,59 @@ func (c *DbAgent) Validate(Create bool) error {
 	if strings.TrimSpace(c.APIKey) == "" {
 		return fmt.Errorf("invalid APIKey")
 	}
+
+	//validation accés agent
+	insClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	pingurl := c.Host + "/task/ping"
+	req, err := http.NewRequest("GET", pingurl, nil)
+	if err != nil {
+		return fmt.Errorf("agent request error : %v", err.Error())
+	}
+	req.Header.Add("X-Api-Key", c.APIKey)
+	resp, err := insClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("agent request error : %v", err.Error())
+	}
+	defer resp.Body.Close()
+
+	b, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("agent response error : %v", resp.Status)
+	}
+	if string(b) != "OK" {
+		return fmt.Errorf("agent response : invalid API key")
+	}
+
+	// recup info sécurité
+	tls := false
+	secInfo := ""
+	certInvalid := false
+	certSign := ""
+	if resp.TLS != nil {
+		tls = true
+		cert := resp.TLS.PeerCertificates[0]
+
+		secInfo = "Subject : " + cert.Subject.String()
+		secInfo += ", Issuer : " + cert.Issuer.String()
+
+		_, err = cert.Verify(x509.VerifyOptions{})
+		if err != nil {
+			certSign = hex.EncodeToString(cert.Signature)
+			certInvalid = true
+			secInfo += ". ERROR : " + err.Error()
+		}
+	}
+
+	// reponse ok, on constitu le détail
+	c.CertSignAllowed = certSign
+	c.Tls = tls
+	c.EvalResultOK = !certInvalid
+	c.EvalResultInfo = secInfo
 
 	return nil
 }
