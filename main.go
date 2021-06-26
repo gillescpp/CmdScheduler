@@ -4,9 +4,11 @@ import (
 	"CmdScheduler/ctrl"
 	"CmdScheduler/dal"
 	"CmdScheduler/schd"
+	"CmdScheduler/sessions"
 	"encoding/hex"
 	"log"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/securecookie"
 	"github.com/spf13/viper"
@@ -31,6 +33,25 @@ func main() {
 		log.Fatalln("initSessionKey", err)
 	}
 
+	//init sessions store
+	sesDurationTxt, _ := dal.CfgKVGet("web.session_duration")
+	sesDuration, _ := time.ParseDuration(sesDurationTxt)
+	if sesDuration.Minutes() <= 0 || sesDuration.Hours() > 9999 {
+		sesDuration = time.Minute * 20
+	}
+	sessions.InitSessionStore(sesDuration)
+
+	//goroutine de maintenance
+	tickerCache := time.NewTicker(time.Minute)
+	go func() {
+		for c := range tickerCache.C {
+			//ras des sessions périmés
+			if c.Minute()%10 == 0 {
+				sessions.Purge()
+			}
+		}
+	}()
+
 	//lancement task scheduleur
 	schd.Start()
 	defer schd.Stop()
@@ -42,7 +63,7 @@ func main() {
 	log.Fatal(ctrl.ListenAndServe(strListenOn))
 }
 
-// initSessionKey SESSION_KEY
+// initSessionKey SESSION_KEY (pour cookie sécurisé)
 func initSessionKey() error {
 	sk, err := dal.CfgKVGet("web.session_key")
 	if err != nil {

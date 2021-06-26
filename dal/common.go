@@ -7,7 +7,7 @@ import (
 )
 
 // RightLevel represente un niveau de droit
-// (pas de gestion granularité un niveau n a toute les droits <=n aquis )
+// (pas de gestion degranularité un niveau n a toute les droits <=n aquis )
 type RightLevel int
 
 // Constante palier de droit actuellement en place
@@ -18,6 +18,24 @@ const (
 	RightLvlViewer      = 1   // Droit niveau viewer
 )
 
+// liste des crud code valide
+var crudCodeList = map[string]bool{
+	"USER":     true,
+	"AGENT":    true,
+	"TASK":     true,
+	"QUEUE":    true,
+	"TAGS":     true,
+	"CONFIG":   true,
+	"TASKFLOW": true,
+	"SCHED":    true,
+}
+
+// RightView pour représentation json d'un droit sur un type de donnée
+type RightView struct {
+	Allowed  bool `json:"allowed"`
+	ReadOnly bool `json:"read_only"`
+}
+
 // IsAutorised retourne si le droit est applicable au righet level
 // paliers défini en dur dans cette fonction
 // 100 : admin
@@ -26,7 +44,9 @@ const (
 // 1 : Viewer
 func IsAutorised(rightlevel RightLevel, crudcode string, edit bool) bool {
 	allowed := false
-	crudcode = strings.ToUpper(crudcode)
+	if _, exists := crudCodeList[crudcode]; !exists {
+		return false
+	}
 	switch {
 	case (crudcode == "USER"):
 		allowed = (rightlevel >= RightLvlAdmin)
@@ -48,44 +68,19 @@ func IsAutorised(rightlevel RightLevel, crudcode string, edit bool) bool {
 	return allowed
 }
 
-// Filter config filtre pour listing
-/*
-type Filter struct {
-	ShowDeleted    bool //voir les records marqués deleted
-	OtherSQLFilter string
-	OnlyThisID     int //mode 1 id
+// GetRigthList retourn la liste de droit pour un RightLevel
+func GetRigthList(rightlevel RightLevel) map[string]RightView {
+	ret := make(map[string]RightView)
+	for k := range crudCodeList {
+		r := IsAutorised(rightlevel, k, false)
+		w := IsAutorised(rightlevel, k, true)
+		ret[k] = RightView{
+			Allowed:  r,
+			ReadOnly: w,
+		}
+	}
+	return ret
 }
-
-// ToSQL retourne le filtre sql
-func (c Filter) ToSQL(alias string, noEmpty bool) (string, []interface{}) {
-	arrP := make([]interface{}, 0)
-	sqlReturn := ""
-	sqlAlias := ""
-	if alias != "" {
-		sqlAlias = "." + alias
-	}
-
-	if c.OnlyThisID > 0 {
-		sqlReturn += sqlAlias + "ID = ?"
-		arrP = append(arrP, &c.OnlyThisID)
-		return sqlReturn, arrP
-	}
-	if !c.ShowDeleted {
-		sqlReturn += sqlAlias + "deleted_at is null and"
-	}
-	if c.OtherSQLFilter != "" {
-		sqlReturn += c.OtherSQLFilter + " and"
-	}
-
-	if sqlReturn != "" { //suppression dernier and
-		sqlReturn = sqlReturn[0 : len(sqlReturn)-4]
-	}
-	if noEmpty && sqlReturn == "" {
-		sqlReturn = "1=1"
-	}
-	return sqlReturn, arrP
-}
-*/
 
 // Paging config paging pour listing
 type Paging struct {

@@ -1,12 +1,16 @@
 package ctrl
 
 import (
+	"CmdScheduler/dal"
+	"CmdScheduler/sessions"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/julienschmidt/httprouter"
+	"github.com/spf13/viper"
 )
 
 //variable globale controleur
@@ -17,21 +21,63 @@ var (
 //JSONStdResponse réponse json générique
 type JSONStdResponse struct {
 	Error  string `json:"errorMessage,omitempty"`
-	ID     string `json:"Id,omitempty"`
-	Result string `json:"Result,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Result string `json:"result,omitempty"`
 }
 
-// Securité : simples code action autorisé
-// * : ADMIN : tous les droits, dont la gestion des uers
-// T : TASKCREATOR : creer/modif des taches
-// S : SCHEDULE : creer/modif des planif
-// V : VIEWER : visu planning
+// getBearerToken recup token bearer
+func getBearerToken(r *http.Request) string {
+	hAuth := r.Header.Get("Authorization")
+	hs := strings.Split(hAuth, "Bearer ")
+	if len(hs) == 2 {
+		return strings.TrimSpace(hs[1])
+	}
+	return ""
+}
 
 // secMiddleWare middleware pour la gestion de la sécurité
-// secMiddleWare middle
-func secMiddleWare(requiredRoles string, handler httprouter.Handle) httprouter.Handle {
+func secMiddleWare(crudCode string, cors bool, next httprouter.Handle) httprouter.Handle {
 	////TODO : si pas loggué : redirection, si ko : 503
-	return handler
+	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		// check token
+		if crudCode != "" {
+			//extraction token passé en "Authorization: Bearer <TOKEN>"
+			token := getBearerToken(r)
+
+			//pas de token, ou token invalide -> auth required 401
+			s := sessions.Get(token)
+			if token == "" || s == nil {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+
+			//check test role user, on déduit le fait que ce soit une tentative de modif/insertion/delete de part le verbe
+			edit := r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" || r.Method == "DELETE"
+			if !dal.IsAutorised(dal.RightLevel(s.RightLevel), crudCode, edit) {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+		}
+
+		// adjonction cors
+		if cors {
+			c := viper.GetString("allow-origin")
+			if c != "" {
+				w.Header().Set("Access-Control-Allow-Origin", c)
+				if r.Method == "OPTIONS" && r.Header.Get("Access-Control-Request-Method") != "" { //query cors preflight
+					w.Header().Set("Access-Control-Allow-Methods", "POST, PUT, GET, OPTIONS, DELETE")
+					w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+				}
+			}
+		}
+
+		if next != nil {
+			next(w, r, ps)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+
+	}
 }
 
 // Helpers pour les réponses API
@@ -77,6 +123,14 @@ func writeStdJSONErrNotFound(w http.ResponseWriter, errMsg string) {
 //writeStdJSONErrForbidden erreur applicative
 func writeStdJSONErrForbidden(w http.ResponseWriter, errMsg string) {
 	writeStdJSONResp(w, http.StatusForbidden, JSONStdResponse{
+		Error:  errMsg,
+		Result: "ERROR",
+	})
+}
+
+//writeStdJSONUnauthorized erreur applicative
+func writeStdJSONUnauthorized(w http.ResponseWriter, errMsg string) {
+	writeStdJSONResp(w, http.StatusUnauthorized, JSONStdResponse{
 		Error:  errMsg,
 		Result: "ERROR",
 	})

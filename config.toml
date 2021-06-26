@@ -2,3 +2,4 @@ http_port = 8100
 db_driver = "sqlite3"
 db_datasource = "file:data.db"
 db_schema = "SCHED"
+allow-origin = "*"

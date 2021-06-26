@@ -31,9 +31,7 @@ func apiUserGet(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	}
 
 	//retour ok
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(usr)
+	writeStdJSONResp(w, http.StatusOK, usr)
 }
 
 //apiUserList handler get /users
@@ -74,9 +72,7 @@ func apiUserCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) 
 		return
 	}
 	//retour ok : 201 created
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Location", r.URL.Path+"/"+strconv.Itoa(usr.ID))
-	w.WriteHeader(http.StatusCreated)
+	writeStdJSONCreated(w, r.URL.Path+"/"+strconv.Itoa(usr.ID))
 }
 
 //apiUserPut handler put /users/:id

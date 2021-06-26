@@ -134,6 +134,20 @@ func initDbTables() error {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
 
+	// 1ere init, on insere un user admin par defaut
+	usr, _, _ := UserList(SearchQuery{
+		Limit: 1,
+	})
+	if len(usr) == 0 {
+		UserInsert(&DbUser{
+			Name:       "Admin",
+			Login:      "admin",
+			RightLevel: RightLvlAdmin,
+			Password:   "admin",
+			Deleted:    false,
+		}, 0)
+	}
+
 	// agents d'exec
 	sql = `CREATE TABLE ` + tblPrefix + `AGENT (
 		id ` + autoinc + `,
