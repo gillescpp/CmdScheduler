@@ -71,7 +71,7 @@ func apiTagCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		return
 	}
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path+"/"+strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
 }
 
 //apiTagPut handler put /tags/:id

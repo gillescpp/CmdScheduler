@@ -39,7 +39,19 @@ func getBearerToken(r *http.Request) string {
 func secMiddleWare(crudCode string, cors bool, next httprouter.Handle) httprouter.Handle {
 	////TODO : si pas loggué : redirection, si ko : 503
 	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-		// check token
+		// adjonction cors
+		if cors {
+			c := viper.GetString("allow-origin")
+			if c != "" {
+				w.Header().Set("Access-Control-Allow-Origin", c)
+				if r.Method == "OPTIONS" && r.Header.Get("Access-Control-Request-Method") != "" { //query cors preflight
+					w.Header().Set("Access-Control-Allow-Methods", "POST, PUT, GET, OPTIONS, DELETE")
+					w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+				}
+			}
+		}
+
+		// auth middleware, check token
 		if crudCode != "" {
 			//extraction token passé en "Authorization: Bearer <TOKEN>"
 			token := getBearerToken(r)
@@ -56,18 +68,6 @@ func secMiddleWare(crudCode string, cors bool, next httprouter.Handle) httproute
 			if !dal.IsAutorised(dal.RightLevel(s.RightLevel), crudCode, edit) {
 				w.WriteHeader(http.StatusForbidden)
 				return
-			}
-		}
-
-		// adjonction cors
-		if cors {
-			c := viper.GetString("allow-origin")
-			if c != "" {
-				w.Header().Set("Access-Control-Allow-Origin", c)
-				if r.Method == "OPTIONS" && r.Header.Get("Access-Control-Request-Method") != "" { //query cors preflight
-					w.Header().Set("Access-Control-Allow-Methods", "POST, PUT, GET, OPTIONS, DELETE")
-					w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
-				}
 			}
 		}
 
@@ -90,10 +90,13 @@ func writeStdJSONResp(w http.ResponseWriter, code int, payload interface{}) {
 }
 
 //writeStdJSONCreated 201 created
-func writeStdJSONCreated(w http.ResponseWriter, locationURL string) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Location", locationURL)
-	w.WriteHeader(http.StatusCreated)
+func writeStdJSONCreated(w http.ResponseWriter, locationURL, ID string) {
+	w.Header().Set("Location", locationURL+"/"+ID)
+	writeStdJSONResp(w, http.StatusCreated, JSONStdResponse{
+		Error:  "",
+		ID:     ID,
+		Result: "OK",
+	})
 }
 
 //writeStdJSONBadErrRequest erreur bad request

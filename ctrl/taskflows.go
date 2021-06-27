@@ -76,7 +76,7 @@ func apiTaskFlowCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Para
 	schd.UpdateSchedFromDb("DbTaskFlow", elm.ID)
 
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path+"/"+strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
 }
 
 //apiTaskFlowPut handler put /taskflows/:id

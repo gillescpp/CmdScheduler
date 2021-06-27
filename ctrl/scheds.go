@@ -76,7 +76,7 @@ func apiSchedCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 	schd.UpdateSchedFromDb("DbSched", elm.ID)
 
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path+"/"+strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
 }
 
 //apiSchedPut handler put /scheds/:id

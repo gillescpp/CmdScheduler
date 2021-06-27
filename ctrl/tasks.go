@@ -76,7 +76,7 @@ func apiTaskCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) 
 	schd.UpdateSchedFromDb("DbTask", elm.ID)
 
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path+"/"+strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
 }
 
 //apiTaskPut handler put /tasks/:id

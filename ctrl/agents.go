@@ -76,7 +76,7 @@ func apiAgentCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 	schd.UpdateSchedFromDb("DbAgent", elm.ID)
 
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path+"/"+strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
 }
 
 //apiAgentPut handler put /agents/:id
