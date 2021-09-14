@@ -65,13 +65,19 @@ func apiTagCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		return
 	}
 
-	err = dal.TagInsert(&elm, 0)
+	err = dal.TagInsert(&elm, getUsrIdFromCtx(r))
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
+	elm, err = dal.TagGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
 	}
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID), &elm)
 }
 
 //apiTagPut handler put /tags/:id
@@ -91,13 +97,20 @@ func apiTagPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		return
 	}
 
-	err = dal.TagUpdate(elm, 0)
+	err = dal.TagUpdate(elm, getUsrIdFromCtx(r))
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
 	}
+
+	elm, err = dal.TagGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, &elm)
 }
 
 //apiTagDelete handler delete /tags/:id
@@ -114,12 +127,12 @@ func apiTagDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		return
 	}
 	if elm.ID > 0 {
-		err = dal.TagDelete(elm.ID, 0)
+		err = dal.TagDelete(elm.ID, getUsrIdFromCtx(r))
 		if err != nil {
 			writeStdJSONErrInternalServer(w, err.Error())
 			return
 		}
 	}
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, nil)
 }

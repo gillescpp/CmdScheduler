@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -18,7 +19,7 @@ func AgentList(filter SearchQuery) ([]DbAgent, PagedResponse, error) {
 	//nb rows
 	var nbRow sql.NullInt64
 	if filter.Limit > 1 {
-		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `AGENT ` + filter.GetSQLWhere()
+		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `AGENT AGENT ` + filter.GetSQLWhere()
 		err = MainDB.QueryRow(q, filter.SQLParams...).Scan(&nbRow)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("AgentList NbRow %w", err)
@@ -26,11 +27,18 @@ func AgentList(filter SearchQuery) ([]DbAgent, PagedResponse, error) {
 	}
 
 	//pour retour d'info avec info paging
-	pagedResp = NewPagedResponse(arr, filter.Offset, filter.Limit, int(nbRow.Int64))
+	pagedResp = NewPagedResponse(arr, filter, int(nbRow.Int64))
 
 	// listing
-	q := ` SELECT id, host, apikey, certsignallowed, tls, deleted_at
-		FROM ` + tblPrefix + `AGENT ` + filter.GetSQLWhere()
+	q := ` SELECT AGENT.id, AGENT.host, AGENT.apikey, AGENT.certsignallowed
+		, USERC.login as loginC, AGENT.created_at
+		, USERU.login as loginU, AGENT.updated_at
+		, USERD.login as loginD, AGENT.deleted_at
+		FROM ` + tblPrefix + `AGENT AGENT 
+		left join  ` + tblPrefix + `USER USERC on USERC.id = AGENT.created_by
+		left join  ` + tblPrefix + `USER USERU on USERU.id = AGENT.updated_by
+		left join  ` + tblPrefix + `USER USERD on USERD.id = AGENT.deleted_by
+		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
 	rows, err := MainDB.Query(q, filter.SQLParams...)
@@ -43,11 +51,15 @@ func AgentList(filter SearchQuery) ([]DbAgent, PagedResponse, error) {
 		host      sql.NullString
 		apikey    sql.NullString
 		certsign  sql.NullString
-		tls       sql.NullInt64
+		loginC    sql.NullString
+		loginU    sql.NullString
+		loginD    sql.NullString
+		createdAt sql.NullTime
+		updatedAt sql.NullTime
 		deletedAt sql.NullTime
 	)
 	for rows.Next() {
-		err = rows.Scan(&id, &host, &apikey, &certsign, &tls, &deletedAt)
+		err = rows.Scan(&id, &host, &apikey, &certsign, &loginC, &createdAt, &loginU, &updatedAt, &loginD, &deletedAt)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("AgentList scan %w", err)
 		}
@@ -56,8 +68,9 @@ func AgentList(filter SearchQuery) ([]DbAgent, PagedResponse, error) {
 			Host:            host.String,
 			APIKey:          apikey.String,
 			CertSignAllowed: certsign.String,
-			Tls:             (tls.Int64 == 1),
+			Tls:             strings.HasPrefix(host.String, "https://"),
 			Deleted:         deletedAt.Valid,
+			Info:            stdInfo(&loginC, &loginU, &loginD, &createdAt, &updatedAt, &deletedAt),
 		})
 	}
 	if rows.Err() != nil && rows.Err() != sql.ErrNoRows {
@@ -70,18 +83,15 @@ func AgentList(filter SearchQuery) ([]DbAgent, PagedResponse, error) {
 
 // AgentHostNotExists retourne vrai si le host n'existe pas déja
 func AgentHostNotExists(host string) bool {
-	q := ` SELECT 1 FROM ` + tblPrefix + `AGENT where host = ? `
+	q := ` SELECT 1 FROM ` + tblPrefix + `AGENT AGENT where AGENT.host = ? `
 	err := MainDB.QueryRow(q, host).Scan()
-	if err == sql.ErrNoRows {
-		return true
-	}
-	return false
+	return err == sql.ErrNoRows
 }
 
 // AgentGet get d'un user
 func AgentGet(id int) (DbAgent, error) {
 	var ret DbAgent
-	filter := NewSearchQueryFromID(id)
+	filter := NewSearchQueryFromID("AGENT", id)
 
 	arr, _, err := AgentList(filter)
 	if err != nil {
@@ -103,14 +113,11 @@ func AgentUpdate(elm DbAgent, usrUpdater int) error {
 	}
 
 	q := `UPDATE ` + tblPrefix + `AGENT SET
-		updated_by = ?, updated_at = ? ` + strDelQ + `
-		, host = ?, apikey = ?, certsignallowed = ?, tls = ?
+		updated_by = ?, updated_at = ?  ` + strDelQ + `
+		, host = ?, apikey = ?, certsignallowed = ?
 		where id = ? `
-	tls := 0
-	if elm.Tls {
-		tls = 1
-	}
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Host, elm.APIKey, elm.CertSignAllowed, tls, elm.ID)
+
+	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Host, elm.APIKey, elm.CertSignAllowed, elm.ID)
 	if err != nil {
 		return fmt.Errorf("AgentUpdate err %w", err)
 	}

@@ -66,7 +66,7 @@ func apiTaskCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) 
 		return
 	}
 
-	err = dal.TaskInsert(&elm, 0)
+	err = dal.TaskInsert(&elm, getUsrIdFromCtx(r))
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
@@ -75,8 +75,14 @@ func apiTaskCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) 
 	//notif sched
 	schd.UpdateSchedFromDb("DbTask", elm.ID)
 
+	elm, err = dal.TaskGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID), &elm)
 }
 
 //apiTaskPut handler put /tasks/:id
@@ -96,7 +102,7 @@ func apiTaskPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		return
 	}
 
-	err = dal.TaskUpdate(elm, 0)
+	err = dal.TaskUpdate(elm, getUsrIdFromCtx(r))
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
@@ -105,8 +111,14 @@ func apiTaskPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	//notif sched
 	schd.UpdateSchedFromDb("DbTask", elm.ID)
 
+	elm, err = dal.TaskGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, &elm)
 }
 
 //apiTaskDelete handler delete /tasks/:id
@@ -123,7 +135,7 @@ func apiTaskDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 		return
 	}
 	if elm.ID > 0 {
-		err = dal.TaskDelete(elm.ID, 0)
+		err = dal.TaskDelete(elm.ID, getUsrIdFromCtx(r))
 		if err != nil {
 			writeStdJSONErrInternalServer(w, err.Error())
 			return
@@ -132,5 +144,5 @@ func apiTaskDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 		schd.UpdateSchedFromDb("DbTask", elm.ID)
 	}
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, nil)
 }

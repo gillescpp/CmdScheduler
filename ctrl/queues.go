@@ -66,7 +66,7 @@ func apiQueueCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 		return
 	}
 
-	err = dal.QueueInsert(&elm, 0)
+	err = dal.QueueInsert(&elm, getUsrIdFromCtx(r))
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
@@ -75,8 +75,14 @@ func apiQueueCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 	//notif sched
 	schd.UpdateSchedFromDb("DbQueue", elm.ID)
 
+	elm, err = dal.QueueGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID), &elm)
 }
 
 //apiQueuePut handler put /queues/:id
@@ -105,8 +111,14 @@ func apiQueuePut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	//notif sched
 	schd.UpdateSchedFromDb("DbQueue", elm.ID)
 
+	elm, err = dal.QueueGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, &elm)
 }
 
 //apiQueueDelete handler delete /queues/:id
@@ -123,7 +135,7 @@ func apiQueueDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params)
 		return
 	}
 	if elm.ID > 0 {
-		err = dal.QueueDelete(elm.ID, 0)
+		err = dal.QueueDelete(elm.ID, getUsrIdFromCtx(r))
 		if err != nil {
 			writeStdJSONErrInternalServer(w, err.Error())
 			return
@@ -132,5 +144,5 @@ func apiQueueDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params)
 		schd.UpdateSchedFromDb("DbQueue", elm.ID)
 	}
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, nil)
 }

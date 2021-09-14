@@ -20,12 +20,14 @@ const (
 
 // DbUser model utilisateur, table USER
 type DbUser struct {
-	ID         int    `json:"id"`
-	Name       string `json:"name" apiuse:"search,sort" dbfield:"USER.name"`
-	Login      string `json:"login" apiuse:"search,sort" dbfield:"USER.login"`
-	RightLevel int    `json:"rightlevel"`
-	Password   string `json:"password,omitempty"`
-	Deleted    bool   `json:"deleted" apiuse:"search,sort" dbfield:"USER.deleted_at"` /// todo pour filtrage des non actif ?
+	ID           int    `json:"id"`
+	Name         string `json:"name" apiuse:"search,sort" dbfield:"USER.name"`
+	Login        string `json:"login" apiuse:"search,sort" dbfield:"USER.login"` // unique, mis à null en cas de desactivation
+	RightLevel   int    `json:"rightlevel"`
+	Password     string `json:"password,omitempty"`
+	PasswordHash string `json:"-"` //non publié, usage interne auth
+	Deleted      bool   `json:"deleted" apiuse:"search,sort" dbfield:"USER.deleted_at"`
+	Info         string `json:"info"`
 }
 
 // ValidatePassword pour controle de validité
@@ -36,11 +38,12 @@ func (c *DbUser) ValidatePassword() error {
 	if len(c.Password) < 8 {
 		return fmt.Errorf("password len is < 9")
 	}
+	passphrase := (len(c.Password) > 16) //symbol et num non obligatoire sur pass phrase
 	num := `[0-9]{1}`
 	az := `[a-z]{1}`
 	AZ := `[A-Z]{1}`
 	symbol := `[!@#~$%^&*()+|_]{1}`
-	if b, err := regexp.MatchString(num, c.Password); !b || err != nil {
+	if b, err := regexp.MatchString(num, c.Password); !passphrase && (!b || err != nil) {
 		return fmt.Errorf("password need num")
 	}
 	if b, err := regexp.MatchString(az, c.Password); !b || err != nil {
@@ -49,7 +52,7 @@ func (c *DbUser) ValidatePassword() error {
 	if b, err := regexp.MatchString(AZ, c.Password); !b || err != nil {
 		return fmt.Errorf("password need A_Z")
 	}
-	if b, err := regexp.MatchString(symbol, c.Password); !b || err != nil {
+	if b, err := regexp.MatchString(symbol, c.Password); !passphrase && (!b || err != nil) {
 		return fmt.Errorf("password need symbol")
 	}
 	return nil
@@ -74,7 +77,7 @@ func (c *DbUser) Validate(Create bool) error {
 	// autre spec au mode create
 	if Create {
 		cleanLogin := strings.ToLower(c.Login)
-		cleanLogin = strings.TrimSpace(c.Login)
+		cleanLogin = strings.TrimSpace(cleanLogin)
 		cleanLogin = strings.ReplaceAll(cleanLogin, " ", "-")
 		if !strings.EqualFold(cleanLogin, c.Login) || len(cleanLogin) < 3 {
 			return fmt.Errorf("invalid login")
@@ -94,14 +97,18 @@ func (c *DbUser) Validate(Create bool) error {
 
 // DbAgent agent
 type DbAgent struct {
-	ID              int    `json:"id"`
-	Host            string `json:"host" apiuse:"search,sort" dbfield:"AGENT.host"`
-	APIKey          string `json:"apikey" dbfield:"AGENT.apikey"`
-	CertSignAllowed string `json:"certsign" apiuse:"search,sort" dbfield:"AGENT.certsignallowed"`
-	Tls             bool   `json:"tls" dbfield:"AGENT.tls"`
-	EvalResultOK    bool   `json:"evalresult"`
-	EvalResultInfo  string `json:"evalresultinfo"`
-	Deleted         bool   `json:"deleted" apiuse:"search,sort" dbfield:"AGENT.deleted_at"` /// todo pour filtrage des non actif ?
+	ID                 int    `json:"id"`
+	Host               string `json:"host" apiuse:"search,sort" dbfield:"AGENT.host"` // format http(s)://ip::port
+	APIKey             string `json:"apikey" dbfield:"AGENT.apikey"`
+	CertSignAllowed    string `json:"certsign" apiuse:"search,sort" dbfield:"AGENT.certsignallowed"` // signature de certificat autorisé (cert non valide car autosigné)
+	CertSignEval       string `json:"certsigneval"`                                                  // signature de certificat constaté en eval
+	Tls                bool   `json:"tls"`                                                           //info calculé selon host
+	EvalResultAccessOK bool   `json:"evalresultaccess"`                                              //info res eval du host
+	EvalResultAuthOK   bool   `json:"evalresultauth"`                                                //info res eval du host
+	EvalResultCertOK   bool   `json:"evalresultcert"`                                                //info res eval du host
+	EvalResultInfo     string `json:"evalresultinfo"`                                                //info res eval du host
+	Info               string `json:"info"`
+	Deleted            bool   `json:"deleted" apiuse:"search,sort" dbfield:"USER.deleted_at"`
 }
 
 // Validate pour controle de validité
@@ -122,58 +129,92 @@ func (c *DbAgent) Validate(Create bool) error {
 		return fmt.Errorf("invalid APIKey")
 	}
 
-	//validation accés agent
+	return nil
+}
+
+// Evaluate test l'agent en appelant son ping
+func (c *DbAgent) Evaluate() error {
+	var err error
+	evalStop := false
+	evalInfo := make([]string, 0)
+	c.EvalResultAccessOK = false
+	c.EvalResultAuthOK = false
+	c.EvalResultCertOK = false
+
+	//interro...
 	insClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
+		Timeout: time.Second * 5,
 	}
 
 	pingurl := c.Host + "/task/ping"
 	req, err := http.NewRequest("GET", pingurl, nil)
 	if err != nil {
-		return fmt.Errorf("agent request error : %v", err.Error())
-	}
-	req.Header.Add("X-Api-Key", c.APIKey)
-	resp, err := insClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("agent request error : %v", err.Error())
-	}
-	defer resp.Body.Close()
-
-	b, _ := ioutil.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent response error : %v", resp.Status)
-	}
-	if string(b) != "OK" {
-		return fmt.Errorf("agent response : invalid API key")
+		evalInfo = append(evalInfo, fmt.Sprintf("request error : %v", err.Error()))
+		evalStop = true
 	}
 
-	// recup info sécurité
-	tls := false
-	secInfo := ""
-	certInvalid := false
-	certSign := ""
-	if resp.TLS != nil {
-		tls = true
-		cert := resp.TLS.PeerCertificates[0]
-
-		secInfo = "Subject : " + cert.Subject.String()
-		secInfo += ", Issuer : " + cert.Issuer.String()
-
-		_, err = cert.Verify(x509.VerifyOptions{})
+	if !evalStop {
+		req.Header.Add("X-Api-Key", c.APIKey)
+		resp, err := insClient.Do(req)
 		if err != nil {
-			certSign = hex.EncodeToString(cert.Signature)
-			certInvalid = true
-			secInfo += ". ERROR : " + err.Error()
+			evalInfo = append(evalInfo, fmt.Sprintf("request error : %v", err.Error()))
+			evalStop = true
+		}
+		defer resp.Body.Close()
+
+		//auth agent ok ?
+		if !evalStop {
+			c.EvalResultAccessOK = true
+
+			b, _ := ioutil.ReadAll(resp.Body)
+			if resp.StatusCode != 200 {
+				evalInfo = append(evalInfo, fmt.Sprintf("agent response error : %v", resp.Status))
+			}
+			if string(b) != "OK" {
+				evalInfo = append(evalInfo, "agent response : invalid API key")
+			} else {
+				evalInfo = append(evalInfo, "agent response ok")
+				c.EvalResultAuthOK = true
+			}
+		}
+
+		//eval https
+		if !evalStop {
+			if resp.TLS == nil {
+				evalInfo = append(evalInfo, "insecure (http)")
+			} else {
+				cert := resp.TLS.PeerCertificates[0]
+
+				secInfo := "Subject : " + cert.Subject.String()
+				secInfo += ", Issuer : " + cert.Issuer.String()
+
+				evalInfo = append(evalInfo, "Certificate : "+secInfo)
+				c.CertSignEval = hex.EncodeToString(cert.Signature)
+
+				_, err = cert.Verify(x509.VerifyOptions{})
+				if c.CertSignAllowed != "" {
+					if c.CertSignEval == c.CertSignAllowed {
+						evalInfo = append(evalInfo, "Certificate signature approuved.")
+						c.EvalResultCertOK = true
+					} else {
+						evalInfo = append(evalInfo, "Certificate signature doesn't match the approuved one.")
+					}
+				} else if err != nil {
+					evalInfo = append(evalInfo, "Certificate is invalid : "+err.Error())
+				} else {
+					evalInfo = append(evalInfo, "Certificate seems valid")
+					c.EvalResultCertOK = true
+				}
+			}
 		}
 	}
 
 	// reponse ok, on constitu le détail
-	c.CertSignAllowed = certSign
-	c.Tls = tls
-	c.EvalResultOK = !certInvalid
-	c.EvalResultInfo = secInfo
+	c.Tls = strings.HasPrefix(c.Host, "https://")
+	c.EvalResultInfo = strings.Join(evalInfo, "\n")
 
 	return nil
 }
@@ -188,9 +229,8 @@ type DbTask struct {
 	Cmd      string `json:"cmd" apiuse:"search,sort" dbfield:"TASK.cmd"`
 	Args     string `json:"args" dbfield:"TASK.args"`
 	StartIn  string `json:"start_in" dbfield:"TASK.start_in"`
-	ExecOn   string `json:"exec_on" dbfield:"TASK.exec_on"`
-
-	Deleted bool `json:"deleted" apiuse:"search,sort" dbfield:"TASK.deleted_at"` /// todo pour filtrage des non actif ?
+	ExecOn   []int  `json:"exec_on" dbfield:"TASK.exec_on"` // liste agent d'execution prenant en charge la cmd
+	Info     string `json:"info"`
 }
 
 // Validate pour controle de validité
@@ -219,24 +259,75 @@ func (c *DbTask) Validate(Create bool) error {
 	}
 	c.Args = strings.TrimSpace(c.Args)
 	c.StartIn = strings.TrimSpace(c.StartIn)
-	c.ExecOn = strings.TrimSpace(c.ExecOn)
+	c.ExecOn = clearInts(c.ExecOn)
 
 	c.LogStore = strings.TrimSpace(c.LogStore)
-	c.LogStore = strings.ReplaceAll(c.LogStore, "  ", " ")
+	for strings.Contains(c.LogStore, "  ") {
+		c.LogStore = strings.ReplaceAll(c.LogStore, "  ", " ")
+	}
 	c.LogStore = strings.ReplaceAll(c.LogStore, " ", "-")
 	c.LogStore = strings.ToLower(c.LogStore)
 
 	return nil
 }
 
+// DbTag tag
+type DbTag struct {
+	ID    int    `json:"id"`
+	Lib   string `json:"lib" apiuse:"search,sort" dbfield:"TAG.lib"`
+	Group string `json:"group" apiuse:"search,sort" dbfield:"TAG.tgroup"` //libellé du groupe
+	Info  string `json:"info"`
+}
+
+// Validate pour controle de validité
+func (c *DbTag) Validate(Create bool) error {
+	if Create && c.ID > 0 {
+		return fmt.Errorf("invalid create")
+	} else if !Create && c.ID <= 0 {
+		return fmt.Errorf("invalid id")
+	}
+
+	rexpForbiddenChars, err := regexp.Compile("[^a-zA-Z0-9-_]")
+	if err != nil {
+		return fmt.Errorf("regexp %v", err)
+	}
+
+	c.Lib = strings.TrimSpace(c.Lib)
+	for strings.Contains(c.Lib, "  ") {
+		c.Lib = strings.ReplaceAll(c.Lib, "  ", " ")
+	}
+	c.Lib = strings.ToLower(c.Lib)
+	c.Lib = rexpForbiddenChars.ReplaceAllString(c.Lib, "-")
+	if c.Lib == "" {
+		return fmt.Errorf("invalid lib")
+	}
+
+	c.Group = strings.TrimSpace(c.Group)
+	for strings.Contains(c.Group, "  ") {
+		c.Group = strings.ReplaceAll(c.Group, "  ", " ")
+	}
+	c.Group = strings.ToLower(c.Group)
+	c.Group = rexpForbiddenChars.ReplaceAllString(c.Group, "-")
+	if c.Group == "" {
+		return fmt.Errorf("invalid group")
+	}
+
+	return nil
+}
+
 // DbQueue queue
 type DbQueue struct {
-	ID      int    `json:"id"`
-	Lib     string `json:"lib" apiuse:"search,sort" dbfield:"QUEUE.lib"`
-	Size    int    `json:"size" apiuse:"search,sort" dbfield:"QUEUE.size"`
-	Timeout int    `json:"timeout" dbfield:"QUEUE.timeout"`
+	ID          int    `json:"id"`
+	Lib         string `json:"lib" apiuse:"search,sort" dbfield:"QUEUE.lib"`
+	MaxSize     int    `json:"size" apiuse:"search,sort" dbfield:"QUEUE.size"` // taille de fil max
+	MaxDuration int    `json:"timeout" dbfield:"QUEUE.timeout"`                // en ms
 
-	Deleted bool `json:"deleted" apiuse:"search,sort" dbfield:"QUEUE.deleted_at"` /// todo pour filtrage des non actif ?
+	PausedManual     bool      `json:"paused" dbfield:"QUEUE.pausedfrom"`
+	PausedManualFrom time.Time `json:"paused_from"` // pause manuelle (agir sur PausedManual)
+
+	NoExecWhile []int `json:"no_exec_while_queues"` //execution simultannée avec autres queue interdite
+
+	Info string `json:"info"`
 }
 
 // Validate pour controle de validité
@@ -251,59 +342,44 @@ func (c *DbQueue) Validate(Create bool) error {
 	if strings.TrimSpace(c.Lib) == "" {
 		return fmt.Errorf("invalid lib")
 	}
-	if c.Size < 0 {
-		c.Size = 0
+	if c.MaxSize < 0 {
+		c.MaxSize = 0
 	}
-	if c.Timeout < 0 {
-		c.Timeout = 0
+	if c.MaxDuration < 0 {
+		c.MaxDuration = 0
 	}
+	//..todo : cttrl des FK
 	return nil
 }
 
-// DbTag tag
-type DbTag struct {
-	ID    int    `json:"id"`
-	Lib   string `json:"lib" apiuse:"search,sort" dbfield:"TAG.lib"`
-	Group string `json:"group" apiuse:"search,sort" dbfield:"TAG.tgroup"`
-
-	Deleted bool `json:"deleted" apiuse:"search,sort" dbfield:"TAG.deleted_at"` /// todo pour filtrage des non actif ?
-}
-
-// Validate pour controle de validité
-func (c *DbTag) Validate(Create bool) error {
-	if Create && c.ID > 0 {
-		return fmt.Errorf("invalid create")
-	} else if !Create && c.ID <= 0 {
-		return fmt.Errorf("invalid id")
-	}
-
-	c.Lib = strings.TrimSpace(c.Lib)
-	c.Lib = strings.ReplaceAll(c.Lib, "  ", " ")
-	c.Lib = strings.ReplaceAll(c.Lib, " ", "-")
-	c.Lib = strings.ToLower(c.Lib)
-	if c.Lib == "" {
-		return fmt.Errorf("invalid lib")
-	}
-
-	c.Group = strings.TrimSpace(c.Group)
-	c.Group = strings.ReplaceAll(c.Group, "  ", " ")
-	c.Group = strings.ReplaceAll(c.Group, " ", "-")
-	c.Group = strings.ToLower(c.Group)
-	if c.Group == "" {
-		return fmt.Errorf("invalid group")
-	}
-
-	return nil
-}
+const (
+	// SchedResUN DbTaskFlow.LastResult non connu
+	SchedResUN = 0
+	// SchedResOK DbTaskFlow.LastResult rés ok
+	SchedResOK = 1
+	// SchedResKO DbTaskFlow.LastResult rés ko
+	SchedResKO = -1
+)
 
 // DbTaskFlow description tache à executer
 type DbTaskFlow struct {
-	ID     int                `json:"id"`
-	Lib    string             `json:"lib" apiuse:"search,sort" dbfield:"TASKFLOW.lib"`
-	Tags   string             `json:"tags" apiuse:"search,sort" dbfield:"TASKFLOW.tags"`
+	ID           int    `json:"id"`
+	Lib          string `json:"lib" apiuse:"search,sort" dbfield:"TASKFLOW.lib"`
+	Tags         []int  `json:"tags" apiuse:"search,sort" dbfield:"TASKFLOW.tags"`
+	Activ        bool   `json:"activ" apiuse:"search,sort" dbfield:"TASKFLOW.activ"`
+	ManualLaunch bool   `json:"manuallaunch" apiuse:"search,sort" dbfield:"TASKFLOW.manuallaunch"`
+	ScheduleID   int    `json:"scheduleid" apiuse:"search" dbfield:"TASKFLOW.scheduleid"`
+	ErrMngt      int    `json:"err_management" apiuse:"search" dbfield:"TASKFLOW.err_management"`
+	QueueID      int    `json:"queueid" apiuse:"search" dbfield:"TASKFLOW.queueid"`
+
+	LastStart  time.Time `json:"last_start" apiuse:"search" dbfield:"TASKFLOW.last_start"`
+	LastStop   time.Time `json:"last_stop" apiuse:"search" dbfield:"TASKFLOW.last_stop"`
+	LastResult int       `json:"last_result" apiuse:"search" dbfield:"TASKFLOW.last_result"`
+	LastMsg    string    `json:"last_msg" apiuse:"search" dbfield:"TASKFLOW.last_msg"`
+
 	Detail []DbTaskFlowDetail `json:"detail"`
 
-	Deleted bool `json:"deleted" apiuse:"search,sort" dbfield:"TASKFLOW.deleted_at"` /// todo pour filtrage des non actif ?
+	Info string `json:"info"`
 }
 
 // DbTaskFlowDetail détail task flow
@@ -312,7 +388,7 @@ type DbTaskFlowDetail struct {
 	TaskID         int `json:"taskid" dbfield:"TASKFLOWDETAIL.taskid"` //idx base 0
 	NextTaskIDOK   int `json:"nexttaskid_ok" dbfield:"TASKFLOWDETAIL.nexttaskid_ok"`
 	NextTaskIDFail int `json:"nexttaskid_fail" dbfield:"TASKFLOWDETAIL.nexttaskid_fail"`
-	NotifFail      int `json:"notiffail" dbfield:"TASKFLOWDETAIL.notiffail"`
+	RetryIfFail    int `json:"retryif_fail" dbfield:"TASKFLOWDETAIL.retryif_fail"`
 }
 
 // Validate pour controle de validité
@@ -323,11 +399,11 @@ func (c *DbTaskFlow) Validate(Create bool) error {
 		return fmt.Errorf("invalid id")
 	}
 
-	// autre spec au mode create
 	c.Lib = strings.TrimSpace(c.Lib)
 	if strings.TrimSpace(c.Lib) == "" {
 		return fmt.Errorf("invalid lib")
 	}
+	c.Tags = clearInts(c.Tags)
 
 	// check détail
 	if len(c.Detail) == 0 {
@@ -361,45 +437,27 @@ func (c *DbTaskFlowDetail) Validate(Create bool, DetailListSize int) error {
 	return nil
 }
 
-const (
-	// SchedResUN DbSched.LastResult non connu
-	SchedResUN = 0
-	// SchedResOK DbSched.LastResult rés ok
-	SchedResOK = 1
-	// SchedResKO DbSched.LastResult rés ko
-	SchedResKO = -1
-)
-
-// DbSched représente une planif d'un tache :
-// - TaskFlowID : Id du task flow à executer
-// - ErrLevel : code gestion d'erreur
-// - QueueID : si soumis à une queue donnée
-// - Activ : flag activation
-// - LastStart / LastStop : plage dernier fonctionnement (UTC)
-// - LastResult : cf. SchedRes
-// - LastMsg : msg dernier résultat
-// - Detail : liste des planif d'activation
+// DbSched représente une planif ou une période  :
+// IsPeriod = true : Période, réprésente des jours ou plage horaires autorisés
+// IsPeriod = planif :
+//              - type intervalle : execution toutes les n minutes
+//              - type heure fixe : execution à heure donnée
 type DbSched struct {
-	ID         int       `json:"id"`
-	TaskFlowID int       `json:"taskflowid" apiuse:"search,sort" dbfield:"SCHED.taskflowid"`
-	ErrLevel   int       `json:"err_level" apiuse:"search,sort" dbfield:"SCHED.err_level"`
-	QueueID    int       `json:"queueid" apiuse:"search,sort" dbfield:"SCHED.queueid"`
-	Activ      bool      `json:"activ" apiuse:"search,sort" dbfield:"SCHED.activ"`
-	LastStart  time.Time `json:"last_start" apiuse:"search,sort" dbfield:"SCHED.last_start"`
-	LastStop   time.Time `json:"last_stop" apiuse:"search,sort" dbfield:"SCHED.last_stop"`
-	LastResult int       `json:"last_result" apiuse:"search,sort" dbfield:"SCHED.last_result"`
-	LastMsg    string    `json:"last_msg" apiuse:"search,sort" dbfield:"SCHED.last_msg"`
-	TimeZone   string    `json:"time_zone" apiuse:"search,sort" dbfield:"SCHED.time_zone"`
-	zone       *time.Location
+	ID       int    `json:"id"`
+	Lib      string `json:"lib" apiuse:"search,sort" dbfield:"PERIOD.lib"`
+	IsPeriod bool   `json:"is_period"` //db : type=0 pour les periode, 1 puor les planif
+	TimeZone string `json:"time_zone" apiuse:"search,sort" dbfield:"PERIOD.time_zone"`
+	zone     *time.Location
 
 	Detail []DbSchedDetail `json:"detail"`
 
-	Deleted bool `json:"deleted" apiuse:"search,sort" dbfield:"SCHED.deleted_at"` /// todo pour filtrage des non actif ?
+	Info string `json:"info"`
 }
 
-// DbSchedDetail détail activation sched
+// DbSchedDetail détail planif ou periode
 // - Interval : 0 si prog horaire fixe, ou tps en seconde pour type intervalle
 // - IntervalHours : plages horaires 08:00:05-10:00:00,14:00:00-18:00:00 appliqué pour un type interval
+// en mode period, Interval et Hours sont toujours à zero
 // - Hours : liste horaire d'exec 08:00:05, 10:00:00 (shed type heure fixe)
 // - Months : mois d'exex format JFMAMJJASOND : "01000100000" ou "*" pour tous
 // - WeekDays : jours d'exex format LMMJVSD : "1111100" ou "*" pour tous
@@ -407,12 +465,12 @@ type DbSched struct {
 //               (1er lundi du mois, 2eme mardi du mois, 1e j du mois, dernier j du mois) ou "*" pour tous
 // Toutes les dates heures sont dans la tz fourni à la création
 type DbSchedDetail struct {
-	Interval      int    `json:"interval,omitempty" dbfield:"TASKFLOWDETAIL.interval"`
-	IntervalHours string `json:"intervalhours,omitempty" dbfield:"TASKFLOWDETAIL.intervalhours"`
-	Hours         string `json:"hours,omitempty" dbfield:"TASKFLOWDETAIL.hours"`
-	Months        string `json:"months" dbfield:"TASKFLOWDETAIL.months"`
-	WeekDays      string `json:"weekdays" dbfield:"TASKFLOWDETAIL.weekdays"`
-	MonthDays     string `json:"monthdays" dbfield:"TASKFLOWDETAIL.monthdays"`
+	Interval      int    `json:"interval,omitempty" dbfield:"PERIODDETAIL.interval"`
+	IntervalHours string `json:"intervalhours,omitempty" dbfield:"PERIODDETAIL.intervalhours"`
+	Hours         string `json:"hours,omitempty" dbfield:"PERIODDETAIL.hours"`
+	Months        string `json:"months" dbfield:"PERIODDETAIL.months"`
+	WeekDays      string `json:"weekdays" dbfield:"PERIODDETAIL.weekdays"`
+	MonthDays     string `json:"monthdays" dbfield:"PERIODDETAIL.monthdays"`
 
 	zone *time.Location //rappel tz paren
 	//intervalHours valeurs deserialisé : pair from->to
@@ -448,32 +506,14 @@ func (c *DbSched) Validate(Create bool) error {
 	}
 	c.TimeZone = c.zone.String()
 
-	if !c.Deleted {
-		task, _ := TaskGet(c.TaskFlowID)
-		if task.ID == 0 {
-			return fmt.Errorf("invalid taskflow id")
-		}
-
-		if c.ErrLevel < 0 {
-			c.ErrLevel = 0
-		}
-
-		if c.QueueID != 0 {
-			queue, _ := QueueGet(c.QueueID)
-			if queue.ID == 0 {
-				return fmt.Errorf("invalid queue id")
-			}
-		}
-
-		// check détail
-		if len(c.Detail) == 0 {
-			return fmt.Errorf("invalid scheduling")
-		}
-		for i := range c.Detail {
-			e := c.Detail[i].Validate(Create, c.zone)
-			if e != nil {
-				return fmt.Errorf("invalid scheduling %v : %v", (i + 1), e)
-			}
+	// check détail
+	if len(c.Detail) == 0 {
+		return fmt.Errorf("invalid scheduling")
+	}
+	for i := range c.Detail {
+		e := c.Detail[i].Validate(Create, c.zone)
+		if e != nil {
+			return fmt.Errorf("invalid scheduling %v : %v", (i + 1), e)
 		}
 	}
 
@@ -826,7 +866,7 @@ func (c *DbSchedDetail) CalcNextLaunch(dtRef time.Time) time.Time {
 	if len(c.hours) == 0 || dtRef.IsZero() {
 		return time.Time{}
 	}
-	//précision : seconde
+	//précision : seconde, next lauch imposé > dtref pour eviter tout lancement en double
 	dtRef = dtRef.In(c.zone) //conv en tz du sched
 	dtRef2 := time.Date(dtRef.Year(), dtRef.Month(), dtRef.Day(), dtRef.Hour(), dtRef.Minute(), dtRef.Second(), 0, c.zone)
 	if dtRef2.Before(dtRef) {

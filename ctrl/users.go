@@ -2,6 +2,7 @@ package ctrl
 
 import (
 	"CmdScheduler/dal"
+	"CmdScheduler/sessions"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -19,19 +20,19 @@ func apiUserGet(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	}
 
 	//get dal
-	usr, err := dal.UserGet(id)
+	elm, err := dal.UserGet(id)
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
 	}
 
-	if usr.ID == 0 {
+	if elm.ID == 0 {
 		writeStdJSONErrNotFound(w, "id not found")
 		return
 	}
 
 	//retour ok
-	writeStdJSONResp(w, http.StatusOK, usr)
+	writeStdJSONResp(w, http.StatusOK, elm)
 }
 
 //apiUserList handler get /users
@@ -53,52 +54,71 @@ func apiUserList(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 //si ok : create 201 (Created and contain an entity, and a Location header.) ou 200
 func apiUserCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	//deserial input
-	var usr dal.DbUser
-	err := json.NewDecoder(r.Body).Decode(&usr)
+	var elm dal.DbUser
+	err := json.NewDecoder(r.Body).Decode(&elm)
 	if err != nil {
 		writeStdJSONErrBadRequest(w, err.Error())
 		return
 	}
 
-	err = usr.Validate(true)
+	err = elm.Validate(true)
 	if err != nil {
 		writeStdJSONErrBadRequest(w, err.Error())
 		return
 	}
 
-	err = dal.UserInsert(&usr, 0) //todo : userid selon session user
+	err = dal.UserInsert(&elm, getUsrIdFromCtx(r))
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
 	}
+
+	elm, err = dal.UserGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(usr.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID), &elm)
 }
 
 //apiUserPut handler put /users/:id
 func apiUserPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	//deserial input
-	var usr dal.DbUser
-	err := json.NewDecoder(r.Body).Decode(&usr)
+	var elm dal.DbUser
+	err := json.NewDecoder(r.Body).Decode(&elm)
 	if err != nil {
 		writeStdJSONErrBadRequest(w, err.Error())
 		return
 	}
-	usr.ID, _ = strconv.Atoi(p.ByName("id"))
+	elm.ID, _ = strconv.Atoi(p.ByName("id"))
 
-	err = usr.Validate(false)
+	err = elm.Validate(false)
 	if err != nil {
 		writeStdJSONErrBadRequest(w, err.Error())
 		return
 	}
 
-	err = dal.UserUpdate(usr, 0) //todo : userid selon session user +mode admin, use std ne peu maj que son propre usid
+	err = dal.UserUpdate(elm, getUsrIdFromCtx(r))
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
 	}
+
+	//ras sessions concernés par cet usr id, sauf cas de l'user qui modifie lui même
+	if elm.ID != getUsrIdFromCtx(r) {
+		removeSessionByUsrId(elm.ID)
+	}
+
+	elm, err = dal.UserGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, &elm)
 }
 
 //apiUserDelete handler delete /users/:id
@@ -109,18 +129,34 @@ func apiUserDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 		return
 	}
 
-	usr, err := dal.UserGet(usID)
+	elm, err := dal.UserGet(usID)
 	if err != nil {
 		writeStdJSONErrBadRequest(w, err.Error())
 		return
 	}
-	if usr.ID > 0 {
-		err = dal.UserDelete(usr.ID, 0) //todo : userid selon session
+	if elm.ID > 0 {
+		err = dal.UserDelete(elm.ID, getUsrIdFromCtx(r))
 		if err != nil {
 			writeStdJSONErrInternalServer(w, err.Error())
 			return
 		}
+		//ras sessions concernés par cet usr id, sauf cas de l'user qui modifie lui même
+		if elm.ID != getUsrIdFromCtx(r) {
+			removeSessionByUsrId(elm.ID)
+		}
 	}
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, nil)
+}
+
+//removeSessionByUsrId supprimer la/les session d'un utilisateur donnée
+// (utilisé en cas de modif pour ne pas laisser des clients connecté sur d'anciens drois )
+func removeSessionByUsrId(usrID int) {
+	sessionLst := sessions.List()
+	for token, s := range sessionLst {
+		if s.Data["USRID"].(int) == usrID {
+			sessions.Remove(token)
+			break
+		}
+	}
 }

@@ -88,7 +88,7 @@ func (c *Store) new() *Session {
 	return c.sessions[nkey]
 }
 
-// Purge supprime les ession obsolete
+// Purge supprime les session obsolete
 func (c *Store) purge() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -98,6 +98,13 @@ func (c *Store) purge() {
 			delete(c.sessions, k)
 		}
 	}
+}
+
+// remove supprime une session donnée
+func (c *Store) remove(sessionId string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.sessions, sessionId)
 }
 
 // IsValid test validité session
@@ -121,4 +128,14 @@ func New() *Session {
 // Purge purge session store principal
 func Purge() {
 	sessionsStore.purge()
+}
+
+// Remove supprime une session donnée
+func Remove(sessionId string) {
+	sessionsStore.remove(sessionId)
+}
+
+// List accesseur liste des sessions en cours (token=session)
+func List() map[string]*Session {
+	return sessionsStore.sessions
 }

@@ -3,7 +3,6 @@ package dal
 import (
 	"database/sql"
 	"fmt"
-	"strconv"
 	"time"
 )
 
@@ -16,7 +15,7 @@ func TagList(filter SearchQuery) ([]DbTag, PagedResponse, error) {
 	//nb rows
 	var nbRow sql.NullInt64
 	if filter.Limit > 1 {
-		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `TAG ` + filter.GetSQLWhere()
+		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `TAG TAG ` + filter.GetSQLWhere()
 		err = MainDB.QueryRow(q, filter.SQLParams...).Scan(&nbRow)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("TagList NbRow %w", err)
@@ -24,11 +23,16 @@ func TagList(filter SearchQuery) ([]DbTag, PagedResponse, error) {
 	}
 
 	//pour retour d'info avec info paging
-	pagedResp = NewPagedResponse(arr, filter.Offset, filter.Limit, int(nbRow.Int64))
+	pagedResp = NewPagedResponse(arr, filter, int(nbRow.Int64))
 
 	// listing
-	q := ` SELECT id, lib, tgroup, deleted_at
-		FROM ` + tblPrefix + `TAG ` + filter.GetSQLWhere()
+	q := ` SELECT TAG.id, TAG.lib, TAG.tgroup
+		, USERC.login as loginC, TAG.created_at
+		, USERU.login as loginU, TAG.updated_at
+		FROM ` + tblPrefix + `TAG TAG 
+		left join  ` + tblPrefix + `USER USERC on USERC.id = TAG.created_by
+		left join  ` + tblPrefix + `USER USERU on USERU.id = TAG.updated_by
+		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
 	rows, err := MainDB.Query(q, filter.SQLParams...)
@@ -40,18 +44,21 @@ func TagList(filter SearchQuery) ([]DbTag, PagedResponse, error) {
 		id        int
 		lib       sql.NullString
 		group     sql.NullString
-		deletedAt sql.NullTime
+		createdAt sql.NullTime
+		updatedAt sql.NullTime
+		loginC    sql.NullString
+		loginU    sql.NullString
 	)
 	for rows.Next() {
-		err = rows.Scan(&id, &lib, &group, &deletedAt)
+		err = rows.Scan(&id, &lib, &group, &loginC, &createdAt, &loginU, &updatedAt)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("TagList scan %w", err)
 		}
 		arr = append(arr, DbTag{
-			ID:      id,
-			Lib:     lib.String,
-			Group:   group.String,
-			Deleted: !deletedAt.Valid,
+			ID:    id,
+			Lib:   lib.String,
+			Group: group.String,
+			Info:  stdInfo(&loginC, &loginU, nil, &createdAt, &updatedAt, nil),
 		})
 	}
 	if rows.Err() != nil && rows.Err() != sql.ErrNoRows {
@@ -65,7 +72,7 @@ func TagList(filter SearchQuery) ([]DbTag, PagedResponse, error) {
 // TagGet get d'un tag
 func TagGet(id int) (DbTag, error) {
 	var ret DbTag
-	filter := NewSearchQueryFromID(id)
+	filter := NewSearchQueryFromID("TAG", id)
 
 	arr, _, err := TagList(filter)
 	if err != nil {
@@ -79,15 +86,8 @@ func TagGet(id int) (DbTag, error) {
 
 // TagUpdate maj tag
 func TagUpdate(elm DbTag, usrUpdater int) error {
-	strDelQ := ""
-	if !elm.Deleted {
-		strDelQ = ", deleted_by = NULL, deleted_at = NULL"
-	} else {
-		strDelQ = ", deleted_by = " + strconv.Itoa(usrUpdater) + ", deleted_at = '" + time.Now().Format("2006-01-02T15:04:05.999") + "'"
-	}
-
 	q := `UPDATE ` + tblPrefix + `TAG SET
-		updated_by = ?, updated_at = ? ` + strDelQ + `
+		updated_by = ?, updated_at = ? 
 		, lib = ?, tgroup = ?
 		where id = ? `
 	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, elm.Group, elm.ID)
@@ -100,8 +100,8 @@ func TagUpdate(elm DbTag, usrUpdater int) error {
 
 // TagDelete flag tag suppression
 func TagDelete(elmID int, usrUpdater int) error {
-	q := `UPDATE ` + tblPrefix + `TAG SET deleted_by = ?, deleted_at = ? where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elmID)
+	q := `DELETE FROM ` + tblPrefix + `TAG where id = ? `
+	_, err := MainDB.Exec(q, elmID)
 	if err != nil {
 		return fmt.Errorf("TagDelete err %w", err)
 	}

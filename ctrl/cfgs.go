@@ -69,5 +69,5 @@ func apiCfgPost(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		return
 	}
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, &elm)
 }

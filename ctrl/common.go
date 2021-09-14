@@ -3,6 +3,7 @@ package ctrl
 import (
 	"CmdScheduler/dal"
 	"CmdScheduler/sessions"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,13 @@ import (
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/spf13/viper"
+)
+
+// clé pasé en contexte de recette par le middle ware sécu
+type RequestCtx int
+
+const (
+	CtxSession RequestCtx = iota
 )
 
 //variable globale controleur
@@ -37,7 +45,6 @@ func getBearerToken(r *http.Request) string {
 
 // secMiddleWare middleware pour la gestion de la sécurité
 func secMiddleWare(crudCode string, cors bool, next httprouter.Handle) httprouter.Handle {
-	////TODO : si pas loggué : redirection, si ko : 503
 	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		// adjonction cors
 		if cors {
@@ -51,13 +58,14 @@ func secMiddleWare(crudCode string, cors bool, next httprouter.Handle) httproute
 			}
 		}
 
+		var s *sessions.Session
 		// auth middleware, check token
 		if crudCode != "" {
 			//extraction token passé en "Authorization: Bearer <TOKEN>"
 			token := getBearerToken(r)
 
 			//pas de token, ou token invalide -> auth required 401
-			s := sessions.Get(token)
+			s = sessions.Get(token)
 			if token == "" || s == nil {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
@@ -72,12 +80,28 @@ func secMiddleWare(crudCode string, cors bool, next httprouter.Handle) httproute
 		}
 
 		if next != nil {
-			next(w, r, ps)
+			// on attache la session à la requete pour la suite des api
+			ctx := context.WithValue(r.Context(), CtxSession, s)
+			next(w, r.WithContext(ctx), ps)
 		} else {
 			w.WriteHeader(http.StatusOK)
 		}
 
 	}
+}
+
+// getSessionFromCtx helper pour récupérer la session attaché à la requete par secMiddleWare
+func getSessionFromCtx(r *http.Request) *sessions.Session {
+	return r.Context().Value(CtxSession).(*sessions.Session)
+}
+
+// getUsrIdFromCtx helper pour récupérer l'usr id courant attaché à la session
+func getUsrIdFromCtx(r *http.Request) int {
+	s := getSessionFromCtx(r)
+	if s != nil {
+		return s.Data["USRID"].(int)
+	}
+	return 0
 }
 
 // Helpers pour les réponses API
@@ -90,13 +114,30 @@ func writeStdJSONResp(w http.ResponseWriter, code int, payload interface{}) {
 }
 
 //writeStdJSONCreated 201 created
-func writeStdJSONCreated(w http.ResponseWriter, locationURL, ID string) {
+func writeStdJSONCreated(w http.ResponseWriter, locationURL, ID string, payload interface{}) {
 	w.Header().Set("Location", locationURL+"/"+ID)
-	writeStdJSONResp(w, http.StatusCreated, JSONStdResponse{
-		Error:  "",
-		ID:     ID,
-		Result: "OK",
-	})
+	if payload != nil {
+		writeStdJSONResp(w, http.StatusCreated, payload)
+	} else {
+		writeStdJSONResp(w, http.StatusCreated, JSONStdResponse{
+			Error:  "",
+			ID:     ID,
+			Result: "OK",
+		})
+	}
+}
+
+//writeStdJSONOK réponse ok std
+func writeStdJSONOK(w http.ResponseWriter, payload interface{}) {
+	if payload != nil {
+		writeStdJSONResp(w, http.StatusCreated, payload)
+	} else {
+		writeStdJSONResp(w, http.StatusOK, JSONStdResponse{
+			Error:  "",
+			ID:     "",
+			Result: "OK",
+		})
+	}
 }
 
 //writeStdJSONBadErrRequest erreur bad request
@@ -136,15 +177,6 @@ func writeStdJSONUnauthorized(w http.ResponseWriter, errMsg string) {
 	writeStdJSONResp(w, http.StatusUnauthorized, JSONStdResponse{
 		Error:  errMsg,
 		Result: "ERROR",
-	})
-}
-
-//writeStdJSONOK réponse ok std
-func writeStdJSONOK(w http.ResponseWriter) {
-	writeStdJSONResp(w, http.StatusOK, JSONStdResponse{
-		Error:  "",
-		ID:     "",
-		Result: "OK",
 	})
 }
 

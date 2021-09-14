@@ -3,7 +3,6 @@ package dal
 import (
 	"database/sql"
 	"fmt"
-	"strconv"
 	"time"
 )
 
@@ -16,7 +15,7 @@ func QueueList(filter SearchQuery) ([]DbQueue, PagedResponse, error) {
 	//nb rows
 	var nbRow sql.NullInt64
 	if filter.Limit > 1 {
-		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `QUEUE ` + filter.GetSQLWhere()
+		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `QUEUE QUEUE ` + filter.GetSQLWhere()
 		err = MainDB.QueryRow(q, filter.SQLParams...).Scan(&nbRow)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("QueueList NbRow %w", err)
@@ -24,11 +23,17 @@ func QueueList(filter SearchQuery) ([]DbQueue, PagedResponse, error) {
 	}
 
 	//pour retour d'info avec info paging
-	pagedResp = NewPagedResponse(arr, filter.Offset, filter.Limit, int(nbRow.Int64))
+	pagedResp = NewPagedResponse(arr, filter, int(nbRow.Int64))
 
 	// listing
-	q := ` SELECT id, lib, size, timeout, deleted_at
-		FROM ` + tblPrefix + `QUEUE ` + filter.GetSQLWhere()
+	q := ` SELECT QUEUE.id, QUEUE.lib, QUEUE.size, QUEUE.timeout, QUEUE.pausedfrom 
+		, QUEUE.noexecwhile_queuelist
+		, USERC.login as loginC, QUEUE.created_at
+		, USERU.login as loginU, QUEUE.updated_at
+		FROM ` + tblPrefix + `QUEUE QUEUE 
+		left join  ` + tblPrefix + `USER USERC on USERC.id = QUEUE.created_by
+		left join  ` + tblPrefix + `USER USERU on USERU.id = QUEUE.updated_by		
+		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
 	rows, err := MainDB.Query(q, filter.SQLParams...)
@@ -37,23 +42,31 @@ func QueueList(filter SearchQuery) ([]DbQueue, PagedResponse, error) {
 	}
 	defer rows.Close()
 	var (
-		id        int
-		lib       sql.NullString
-		size      sql.NullInt64
-		timeout   sql.NullInt64
-		deletedAt sql.NullTime
+		id         int
+		lib        sql.NullString
+		size       sql.NullInt64
+		timeout    sql.NullInt64
+		pausedFrom sql.NullTime
+		noexecQL   sql.NullString
+		createdAt  sql.NullTime
+		updatedAt  sql.NullTime
+		loginC     sql.NullString
+		loginU     sql.NullString
 	)
 	for rows.Next() {
-		err = rows.Scan(&id, &lib, &size, &timeout, &deletedAt)
+		err = rows.Scan(&id, &lib, &size, &timeout, &pausedFrom, &noexecQL, &loginC, &createdAt, &loginU, &updatedAt)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("QueueList scan %w", err)
 		}
 		arr = append(arr, DbQueue{
-			ID:      id,
-			Lib:     lib.String,
-			Size:    int(size.Int64),
-			Timeout: int(timeout.Int64),
-			Deleted: deletedAt.Valid,
+			ID:               id,
+			Lib:              lib.String,
+			MaxSize:          int(size.Int64),
+			MaxDuration:      int(timeout.Int64),
+			PausedManual:     pausedFrom.Valid && !pausedFrom.Time.IsZero(),
+			PausedManualFrom: pausedFrom.Time,
+			NoExecWhile:      splitIntFromStr(noexecQL.String),
+			Info:             stdInfo(&loginC, &loginU, nil, &createdAt, &updatedAt, nil),
 		})
 	}
 	if rows.Err() != nil && rows.Err() != sql.ErrNoRows {
@@ -67,7 +80,7 @@ func QueueList(filter SearchQuery) ([]DbQueue, PagedResponse, error) {
 // QueueGet get d'un queue
 func QueueGet(id int) (DbQueue, error) {
 	var ret DbQueue
-	filter := NewSearchQueryFromID(id)
+	filter := NewSearchQueryFromID("QUEUE", id)
 
 	arr, _, err := QueueList(filter)
 	if err != nil {
@@ -81,20 +94,20 @@ func QueueGet(id int) (DbQueue, error) {
 
 // QueueUpdate maj queue
 func QueueUpdate(elm DbQueue, usrUpdater int, admin bool) error {
-	strDelQ := ""
-	if admin {
-		if !elm.Deleted {
-			strDelQ = ", deleted_by = NULL, deleted_at = NULL"
-		} else {
-			strDelQ = ", deleted_by = " + strconv.Itoa(usrUpdater) + ", deleted_at = '" + time.Now().Format("2006-01-02T15:04:05.999") + "'"
+	var pausedfrom sql.NullTime
+	if elm.PausedManual {
+		if elm.PausedManualFrom.IsZero() {
+			elm.PausedManualFrom = time.Now()
 		}
+		pausedfrom.Time = elm.PausedManualFrom
+		pausedfrom.Valid = true
 	}
-
 	q := `UPDATE ` + tblPrefix + `QUEUE SET
-		updated_by = ?, updated_at = ? ` + strDelQ + `
-		, lib = ?, size = ?, timeout = ?
+		updated_by = ?, updated_at = ? 
+		, lib = ?, size = ?, timeout = ?, pausedfrom= ?, noexecwhile_queuelist = ?
 		where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, elm.Size, elm.Timeout, elm.ID)
+	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, elm.MaxSize, elm.MaxDuration,
+		pausedfrom, mergeIntToStr(elm.NoExecWhile), elm.ID)
 	if err != nil {
 		return fmt.Errorf("QueueUpdate err %w", err)
 	}
@@ -102,10 +115,10 @@ func QueueUpdate(elm DbQueue, usrUpdater int, admin bool) error {
 	return nil
 }
 
-// QueueDelete flag queue suppression
+// QueueDelete suppression
 func QueueDelete(elmID int, usrUpdater int) error {
-	q := `UPDATE ` + tblPrefix + `QUEUE SET deleted_by = ?, deleted_at = ? where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elmID)
+	q := `DELETE FROM ` + tblPrefix + `QUEUE where id = ? `
+	_, err := MainDB.Exec(q, elmID)
 	if err != nil {
 		return fmt.Errorf("QueueDelete err %w", err)
 	}

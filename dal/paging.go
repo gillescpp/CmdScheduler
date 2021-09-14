@@ -29,10 +29,10 @@ type PagedResponse struct {
 }
 
 // NewPagedResponse init d'un struct PagedResponse
-func NewPagedResponse(data interface{}, offset int, limit int, recordCount int) PagedResponse {
+func NewPagedResponse(data interface{}, sq SearchQuery, recordCount int) PagedResponse {
 	var pr PagedResponse
-	pr.Offset = offset
-	pr.Limit = limit
+	pr.Offset = sq.Offset
+	pr.Limit = sq.Limit
 	pr.TotalRecord = recordCount
 	pr.Data = data
 	if pr.Offset < 0 {
@@ -51,8 +51,8 @@ func NewPagedResponse(data interface{}, offset int, limit int, recordCount int) 
 		pr.Page = 1
 		pr.TotalPage = 1
 		if pr.TotalRecord > pr.Limit {
-			pr.TotalPage = (pr.TotalRecord / pr.Limit) + 1
-			pr.Page = ((pr.Offset + 1) / pr.TotalRecord) + 1
+			pr.TotalPage = ((pr.TotalRecord - 1) / pr.Limit) + 1
+			pr.Page = (pr.Offset / pr.Limit) + 1
 		}
 	}
 
@@ -114,11 +114,11 @@ func (c SearchQuery) AppendPaging(sql string, rowcount int64) string {
 }
 
 //NewSearchQueryFromID filtre id unique
-func NewSearchQueryFromID(id int) SearchQuery {
+func NewSearchQueryFromID(prefix string, id int) SearchQuery {
 	sq := SearchQuery{
 		Offset:    0,
 		Limit:     1,
-		SQLFilter: "id = ?",
+		SQLFilter: prefix + ".id = ?",
 		SQLParams: []interface{}{id},
 	}
 	return sq

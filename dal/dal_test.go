@@ -1,17 +1,11 @@
 package dal
 
-import (
-	"fmt"
-	"os"
-	"testing"
-	"time"
-)
-
 // const pour le test
 const (
 	testUsr = 9
 )
 
+/*
 // TestRes resultat attendu
 type testRes struct {
 	dataIn        interface{}
@@ -533,3 +527,4 @@ func setup() error {
 func shutdown() {
 
 }
+*/

@@ -66,7 +66,7 @@ func apiSchedCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 		return
 	}
 
-	err = dal.SchedInsert(&elm, 0)
+	err = dal.SchedInsert(&elm, getUsrIdFromCtx(r))
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
@@ -75,8 +75,14 @@ func apiSchedCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 	//noti sched
 	schd.UpdateSchedFromDb("DbSched", elm.ID)
 
+	elm, err = dal.SchedGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID), &elm)
 }
 
 //apiSchedPut handler put /scheds/:id
@@ -105,8 +111,14 @@ func apiSchedPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	//noti sched
 	schd.UpdateSchedFromDb("DbSched", elm.ID)
 
+	elm, err = dal.SchedGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, &elm)
 }
 
 //apiSchedDelete handler delete /scheds/:id
@@ -123,7 +135,7 @@ func apiSchedDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params)
 		return
 	}
 	if elm.ID > 0 {
-		err = dal.SchedDelete(elm.ID, 0)
+		err = dal.SchedDelete(elm.ID, getUsrIdFromCtx(r))
 		if err != nil {
 			writeStdJSONErrInternalServer(w, err.Error())
 			return
@@ -134,5 +146,5 @@ func apiSchedDelete(w http.ResponseWriter, r *http.Request, p httprouter.Params)
 	schd.UpdateSchedFromDb("DbSched", elm.ID)
 
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, nil)
 }

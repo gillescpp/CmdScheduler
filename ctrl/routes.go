@@ -23,7 +23,8 @@ func ListenAndServe(ListenOn string) error {
 	router.GET(root+"/ping", ping) //healthcheck
 
 	// Auth pour obtention token api
-	router.POST(root+"/auth", secMiddleWare("", true, apiAuth)) //200, 401
+	router.POST(root+"/auth", secMiddleWare("", true, apiAuth))            //200, 401
+	router.GET(root+"/disconnect", secMiddleWare("", true, apiDisconnect)) //200
 
 	// user en cours
 	router.GET(root+"/my/right", secMiddleWare("", true, apiGetRightList)) //200, 401

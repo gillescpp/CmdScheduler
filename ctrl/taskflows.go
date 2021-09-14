@@ -66,7 +66,7 @@ func apiTaskFlowCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Para
 		return
 	}
 
-	err = dal.TaskFlowInsert(&elm, 0)
+	err = dal.TaskFlowInsert(&elm, getUsrIdFromCtx(r))
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return
@@ -75,8 +75,14 @@ func apiTaskFlowCreate(w http.ResponseWriter, r *http.Request, _ httprouter.Para
 	//notif sched
 	schd.UpdateSchedFromDb("DbTaskFlow", elm.ID)
 
+	elm, err = dal.TaskFlowGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 201 created
-	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID))
+	writeStdJSONCreated(w, r.URL.Path, strconv.Itoa(elm.ID), &elm)
 }
 
 //apiTaskFlowPut handler put /taskflows/:id
@@ -105,8 +111,14 @@ func apiTaskFlowPut(w http.ResponseWriter, r *http.Request, p httprouter.Params)
 	//notif sched
 	schd.UpdateSchedFromDb("DbTaskFlow", elm.ID)
 
+	elm, err = dal.TaskFlowGet(elm.ID) //reprise valeur sur bdd pour champ calc ou autre val par defaut
+	if err != nil {
+		writeStdJSONErrInternalServer(w, err.Error())
+		return
+	}
+
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, &elm)
 }
 
 //apiTaskFlowDelete handler delete /taskflows/:id
@@ -123,7 +135,7 @@ func apiTaskFlowDelete(w http.ResponseWriter, r *http.Request, p httprouter.Para
 		return
 	}
 	if elm.ID > 0 {
-		err = dal.TaskFlowDelete(elm.ID, 0)
+		err = dal.TaskFlowDelete(elm.ID, getUsrIdFromCtx(r))
 		if err != nil {
 			writeStdJSONErrInternalServer(w, err.Error())
 			return
@@ -132,5 +144,5 @@ func apiTaskFlowDelete(w http.ResponseWriter, r *http.Request, p httprouter.Para
 		schd.UpdateSchedFromDb("DbTaskFlow", elm.ID)
 	}
 	//retour ok : 200
-	writeStdJSONOK(w)
+	writeStdJSONOK(w, nil)
 }

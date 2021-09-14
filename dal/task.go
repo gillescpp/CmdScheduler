@@ -3,7 +3,6 @@ package dal
 import (
 	"database/sql"
 	"fmt"
-	"strconv"
 	"time"
 )
 
@@ -16,7 +15,7 @@ func TaskList(filter SearchQuery) ([]DbTask, PagedResponse, error) {
 	//nb rows
 	var nbRow sql.NullInt64
 	if filter.Limit > 1 {
-		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `TASK ` + filter.GetSQLWhere()
+		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `TASK TASK ` + filter.GetSQLWhere()
 		err = MainDB.QueryRow(q, filter.SQLParams...).Scan(&nbRow)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("TaskList NbRow %w", err)
@@ -24,11 +23,16 @@ func TaskList(filter SearchQuery) ([]DbTask, PagedResponse, error) {
 	}
 
 	//pour retour d'info avec info paging
-	pagedResp = NewPagedResponse(arr, filter.Offset, filter.Limit, int(nbRow.Int64))
+	pagedResp = NewPagedResponse(arr, filter, int(nbRow.Int64))
 
 	// listing
-	q := ` SELECT id, lib, type, timeout, log_store, cmd, args, start_in, exec_on, deleted_at
-		FROM ` + tblPrefix + `TASK ` + filter.GetSQLWhere()
+	q := ` SELECT TASK.id, TASK.lib, TASK.type, TASK.timeout, TASK.log_store, TASK.cmd, TASK.args, TASK.start_in, TASK.exec_on
+		, USERC.login as loginC, TASK.created_at
+		, USERU.login as loginU, TASK.updated_at
+		FROM ` + tblPrefix + `TASK TASK 
+		left join  ` + tblPrefix + `USER USERC on USERC.id = TASK.created_by
+		left join  ` + tblPrefix + `USER USERU on USERU.id = TASK.updated_by
+		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
 	rows, err := MainDB.Query(q, filter.SQLParams...)
@@ -46,10 +50,13 @@ func TaskList(filter SearchQuery) ([]DbTask, PagedResponse, error) {
 		args      sql.NullString
 		startIn   sql.NullString
 		execOn    sql.NullString
-		deletedAt sql.NullTime
+		createdAt sql.NullTime
+		updatedAt sql.NullTime
+		loginC    sql.NullString
+		loginU    sql.NullString
 	)
 	for rows.Next() {
-		err = rows.Scan(&id, &lib, &ttype, &timeout, &logStore, &cmd, &args, &startIn, &execOn, &deletedAt)
+		err = rows.Scan(&id, &lib, &ttype, &timeout, &logStore, &cmd, &args, &startIn, &execOn, &loginC, &createdAt, &loginU, &updatedAt)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("TaskList scan %w", err)
 		}
@@ -62,8 +69,8 @@ func TaskList(filter SearchQuery) ([]DbTask, PagedResponse, error) {
 			Cmd:      cmd.String,
 			Args:     args.String,
 			StartIn:  startIn.String,
-			ExecOn:   execOn.String,
-			Deleted:  deletedAt.Valid,
+			ExecOn:   splitIntFromStr(execOn.String),
+			Info:     stdInfo(&loginC, &loginU, nil, &createdAt, &updatedAt, nil),
 		})
 	}
 	if rows.Err() != nil && rows.Err() != sql.ErrNoRows {
@@ -77,7 +84,7 @@ func TaskList(filter SearchQuery) ([]DbTask, PagedResponse, error) {
 // TaskGet get d'un task
 func TaskGet(id int) (DbTask, error) {
 	var ret DbTask
-	filter := NewSearchQueryFromID(id)
+	filter := NewSearchQueryFromID("TASK", id)
 
 	arr, _, err := TaskList(filter)
 	if err != nil {
@@ -91,20 +98,13 @@ func TaskGet(id int) (DbTask, error) {
 
 // TaskUpdate maj task
 func TaskUpdate(elm DbTask, usrUpdater int) error {
-	strDelQ := ""
-	if !elm.Deleted {
-		strDelQ = ", deleted_by = NULL, deleted_at = NULL"
-	} else {
-		strDelQ = ", deleted_by = " + strconv.Itoa(usrUpdater) + ", deleted_at = '" + time.Now().Format("2006-01-02T15:04:05.999") + "'"
-	}
-
 	q := `UPDATE ` + tblPrefix + `TASK SET
-		updated_by = ?, updated_at = ? ` + strDelQ + `
+		updated_by = ?, updated_at = ?
 		, lib = ?, type = ?, timeout = ?, log_store = ?, cmd = ?, args = ?
 		, start_in = ?, exec_on = ?
 		where id = ? `
 	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, elm.Type, elm.Timeout, elm.LogStore,
-		elm.Cmd, elm.Args, elm.StartIn, elm.ExecOn, elm.ID)
+		elm.Cmd, elm.Args, elm.StartIn, mergeIntToStr(elm.ExecOn), elm.ID)
 	if err != nil {
 		return fmt.Errorf("TaskUpdate err %w", err)
 	}
@@ -114,8 +114,8 @@ func TaskUpdate(elm DbTask, usrUpdater int) error {
 
 // TaskDelete flag task suppression
 func TaskDelete(elmID int, usrUpdater int) error {
-	q := `UPDATE ` + tblPrefix + `TASK SET deleted_by = ?, deleted_at = ? where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elmID)
+	q := `DELETE FROM ` + tblPrefix + `TASK where id = ? `
+	_, err := MainDB.Exec(q, elmID)
 	if err != nil {
 		return fmt.Errorf("TaskDelete err %w", err)
 	}

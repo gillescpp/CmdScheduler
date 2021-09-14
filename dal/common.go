@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RightLevel represente un niveau de droit
@@ -14,7 +15,7 @@ type RightLevel int
 const (
 	RightLvlAdmin       = 100 // Droit niveau Admin
 	RightLvlTaskBuilder = 50  // Droit niveau configurateur de tache
-	RightLvlTaskRunner  = 10  // Droit niveau lanceur/planif de tache
+	RightLvlTaskRunner  = 10  // Droit niveau lanceur de tache manu
 	RightLvlViewer      = 1   // Droit niveau viewer
 )
 
@@ -40,7 +41,7 @@ type RightView struct {
 // paliers défini en dur dans cette fonction
 // 100 : admin
 // 50 : Task Builder
-// 10 : Task Launcher / Planif
+// 10 : Task Launcher
 // 1 : Viewer
 func IsAutorised(rightlevel RightLevel, crudcode string, edit bool) bool {
 	allowed := false
@@ -73,10 +74,13 @@ func GetRigthList(rightlevel RightLevel) map[string]RightView {
 	ret := make(map[string]RightView)
 	for k := range crudCodeList {
 		r := IsAutorised(rightlevel, k, false)
-		w := IsAutorised(rightlevel, k, true)
+		w := false
+		if r {
+			w = IsAutorised(rightlevel, k, true)
+		}
 		ret[k] = RightView{
 			Allowed:  r,
-			ReadOnly: w,
+			ReadOnly: !w,
 		}
 	}
 	return ret
@@ -171,7 +175,7 @@ func CfgKVSet(key string, val string) error {
 // CfgKVIsSystem retourne vrai pour les clés de config system
 func CfgKVIsSystem(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
-	if strings.HasPrefix(key, "web.") || strings.HasPrefix(key, "db.") {
+	if strings.HasPrefix(key, "web.") || strings.HasPrefix(key, "db.") || strings.HasPrefix(key, "sys.") {
 		return true
 	}
 	return false
@@ -209,4 +213,97 @@ func CfgKVList() ([]KVJSON, error) {
 	}
 
 	return arr, nil
+}
+
+// stdInfo calcule info état de mise à jour
+func stdInfo(loginC, loginU, loginD *sql.NullString, createdAt, updatedAt, deletedAt *sql.NullTime) string {
+	info := ""
+	if deletedAt != nil && loginD != nil && deletedAt.Valid {
+		info = "Stopped on " + deletedAt.Time.Format(time.RFC1123Z) + " by " + loginD.String
+	} else if createdAt != nil && loginC != nil && createdAt.Valid {
+		info = "Created on " + createdAt.Time.Format(time.RFC1123Z) + " by " + loginC.String
+		if updatedAt != nil && loginU != nil && updatedAt.Valid {
+			info += ", updated on " + updatedAt.Time.Format(time.RFC1123Z) + " by " + loginU.String
+		}
+	}
+	return info
+}
+
+// clearInts dédoublonnage
+func clearInts(in []int) []int {
+	out := make([]int, 0)
+	dbl := make(map[int]bool)
+
+	for _, e := range in {
+		if _, exists := dbl[e]; !exists {
+			out = append(out, e)
+			dbl[e] = true
+		}
+	}
+	return out
+}
+
+// clearStrs dédoublonnage + suppression des vides
+func clearStrs(in []string) []string {
+	out := make([]string, 0)
+	dbl := make(map[string]bool)
+
+	for _, e := range in {
+		e = strings.TrimSpace(e)
+		if _, exists := dbl[e]; !exists && e != "" {
+			out = append(out, e)
+			dbl[e] = true
+		}
+	}
+	return out
+}
+
+// splitIntFromStr split chaine "1, 5, k, 48" en [1, 5, 48]
+func splitIntFromStr(in string) []int {
+	out := make([]int, 0)
+	splStr := strings.Split(in, ",")
+	for _, e := range splStr {
+		ei, err := strconv.Atoi(strings.TrimSpace(e))
+		if err == nil {
+			out = append(out, ei)
+		}
+	}
+	return out
+}
+
+// mergeIntToStr inverse de splitIntFromStr [1, 5, 48] -> "1,5,48"
+func mergeIntToStr(in []int) string {
+	out := ""
+	for _, v := range in {
+		if out != "" {
+			out += ","
+		}
+		out += strconv.Itoa(v)
+	}
+	return out
+}
+
+// splitStrFromStr split chaine "1, 5, k, 48" en ["1", "5", "k", "48"]
+func splitStrFromStr(in string) []string {
+	out := make([]string, 0)
+	splStr := strings.Split(in, ",")
+	for _, e := range splStr {
+		e = strings.TrimSpace(e)
+		if e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// mergeStrToStr inverse de splitStrFromStr ["1", "5", "48"] -> "1,5,48"
+func mergeStrToStr(in []string) string {
+	out := ""
+	for _, v := range in {
+		if out != "" {
+			out += ","
+		}
+		out += strings.TrimSpace(v)
+	}
+	return out
 }

@@ -18,7 +18,7 @@ func UserList(filter SearchQuery) ([]DbUser, PagedResponse, error) {
 	//nb rows
 	var nbRow sql.NullInt64
 	if filter.Limit > 1 {
-		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `USER ` + filter.GetSQLWhere()
+		q := ` SELECT count(*) as Nb FROM ` + tblPrefix + `USER USER ` + filter.GetSQLWhere()
 		err = MainDB.QueryRow(q, filter.SQLParams...).Scan(&nbRow)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("UserList NbRow %w", err)
@@ -26,11 +26,18 @@ func UserList(filter SearchQuery) ([]DbUser, PagedResponse, error) {
 	}
 
 	//pour retour d'info avec info paging
-	pagedResp = NewPagedResponse(arr, filter.Offset, filter.Limit, int(nbRow.Int64))
+	pagedResp = NewPagedResponse(arr, filter, int(nbRow.Int64))
 
 	// listing
-	q := ` SELECT id, name, login, rightlevel, deleted_at
-		FROM ` + tblPrefix + `USER ` + filter.GetSQLWhere()
+	q := ` SELECT USER.id, USER.name, USER.login, USER.password, USER.rightlevel
+		, USERC.login as loginC, USER.created_at
+		, USERU.login as loginU, USER.updated_at
+		, USERD.login as loginD, USER.deleted_at
+		FROM ` + tblPrefix + `USER USER 
+		left join  ` + tblPrefix + `USER USERC on USERC.id = USER.created_by
+		left join  ` + tblPrefix + `USER USERU on USERU.id = USER.updated_by
+		left join  ` + tblPrefix + `USER USERD on USERD.id = USER.deleted_by
+		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
 	rows, err := MainDB.Query(q, filter.SQLParams...)
@@ -42,20 +49,28 @@ func UserList(filter SearchQuery) ([]DbUser, PagedResponse, error) {
 		id         int
 		name       sql.NullString
 		login      sql.NullString
+		pwd        sql.NullString
+		loginC     sql.NullString
+		loginU     sql.NullString
+		loginD     sql.NullString
 		rightlevel sql.NullInt64
+		createdAt  sql.NullTime
+		updatedAt  sql.NullTime
 		deletedAt  sql.NullTime
 	)
 	for rows.Next() {
-		err = rows.Scan(&id, &name, &login, &rightlevel, &deletedAt)
+		err = rows.Scan(&id, &name, &login, &pwd, &rightlevel, &loginC, &createdAt, &loginU, &updatedAt, &loginD, &deletedAt)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("UserList scan %w", err)
 		}
 		arr = append(arr, DbUser{
-			ID:         id,
-			Name:       name.String,
-			Login:      login.String,
-			RightLevel: int(rightlevel.Int64),
-			Deleted:    deletedAt.Valid,
+			ID:           id,
+			Name:         name.String,
+			Login:        login.String,
+			PasswordHash: pwd.String,
+			RightLevel:   int(rightlevel.Int64),
+			Deleted:      deletedAt.Valid,
+			Info:         stdInfo(&loginC, &loginU, &loginD, &createdAt, &updatedAt, &deletedAt),
 		})
 	}
 	if rows.Err() != nil && rows.Err() != sql.ErrNoRows {
@@ -68,18 +83,15 @@ func UserList(filter SearchQuery) ([]DbUser, PagedResponse, error) {
 
 // UserLoginAvailable retourne vrai si le login est dispo
 func UserLoginAvailable(login string) bool {
-	q := ` SELECT 1 FROM ` + tblPrefix + `USER where login = ? `
+	q := ` SELECT 1 FROM ` + tblPrefix + `USER USER where USER.login = ? `
 	err := MainDB.QueryRow(q, login).Scan()
-	if err == sql.ErrNoRows {
-		return true
-	}
-	return false
+	return err == sql.ErrNoRows
 }
 
 // UserGet get d'un user
 func UserGet(id int) (DbUser, error) {
 	var ret DbUser
-	filter := NewSearchQueryFromID(id)
+	filter := NewSearchQueryFromID("USER", id)
 
 	arr, _, err := UserList(filter)
 	if err != nil {
@@ -92,26 +104,32 @@ func UserGet(id int) (DbUser, error) {
 }
 
 // UserCheckAuth authentification user
-func UserCheckAuth(login string, password string) (int, error) {
-	var err error
-	var usrID sql.NullInt64
-	var usrPassword sql.NullString
+func UserCheckAuth(login string, password string) (DbUser, error) {
+	credErr := fmt.Errorf("invalid user/password")
 
-	q := ` SELECT id, password FROM ` + tblPrefix + `USER where deleted_at is null and login = ? `
-	err = MainDB.QueryRow(q, login).Scan(&usrID, &usrPassword)
-	if err == sql.ErrNoRows || usrID.Int64 == 0 {
-		return 0, fmt.Errorf("Invalid user.password")
-	} else if err != nil {
-		return 0, fmt.Errorf("UserCheckAuth %w", err)
+	//interro user de par le login
+	sq := SearchQuery{
+		Offset:    0,
+		Limit:     1,
+		SQLFilter: "USER.login = ?",
+		SQLParams: []interface{}{login},
+	}
+	arr, _, err := UserList(sq)
+
+	if err != nil {
+		return DbUser{}, err
+	}
+	if len(arr) != 1 {
+		return DbUser{}, credErr
 	}
 
 	//ctrl password
-	err = bcrypt.CompareHashAndPassword([]byte(usrPassword.String), []byte(password))
+	err = bcrypt.CompareHashAndPassword([]byte(arr[0].PasswordHash), []byte(password))
 	if err != nil {
-		return 0, fmt.Errorf("Invalid user.password")
+		return DbUser{}, credErr
 	}
 
-	return int(usrID.Int64), nil
+	return arr[0], nil
 }
 
 // UserUpdate maj user
@@ -125,9 +143,9 @@ func UserUpdate(elm DbUser, usrUpdater int) error {
 
 	q := `UPDATE ` + tblPrefix + `USER SET
 		updated_by = ?, updated_at = ? ` + strDelQ + `
-		, name = ?
+		, name = ?, login = ?, rightlevel = ?
 		where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Name, elm.ID)
+	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Name, elm.Login, elm.RightLevel, elm.ID)
 	if err != nil {
 		return fmt.Errorf("UserUpdate err %w", err)
 	}
@@ -168,7 +186,7 @@ func UserInsert(elm *DbUser, usrUpdater int) error {
 	}()
 
 	//insert base
-	q := `INSERT INTO ` + tblPrefix + `USER (login, created_by, created_at) VALUES(?, ?,?) `
+	q := `INSERT INTO ` + tblPrefix + `USER (login, created_by, created_at) VALUES(?,?,?) `
 	res, err := MainDB.Exec(q, elm.Login, usrUpdater, time.Now())
 	if err != nil {
 		return fmt.Errorf("UserInsert err %w", err)
