@@ -31,6 +31,9 @@ func ListenAndServe(ListenOn string) error {
 	// user en cours
 	router.GET(root+"/my/right", secMiddleWare("", nil, true, apiGetRightList)) //200, 401
 
+	//info dash
+	router.GET(root+"/queue/state", secMiddleWare("QUEUE", nil, true, apiGetQueuesStates)) //200
+
 	//CRUD users
 	router.GET(root+"/users", secMiddleWare("USER", nil, true, apiUserList))          //liste (rep 200, 403)
 	router.GET(root+"/users/:id", secMiddleWare("USER", nil, true, apiUserGet))       //get item (rep 200, 404 not found, 403)

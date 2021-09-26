@@ -49,3 +49,10 @@ func apiManualLaunchTF(w http.ResponseWriter, r *http.Request, _ httprouter.Para
 	//retour ok : 201 created
 	writeStdJSONOK(w, nil)
 }
+
+//apiGetQueuesStates info encours scheduleur
+func apiGetQueuesStates(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	qstate := schd.GetViewState()
+
+	writeStdJSONOK(w, &qstate)
+}

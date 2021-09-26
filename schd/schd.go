@@ -4,6 +4,7 @@ import (
 	"CmdScheduler/dal"
 	"CmdScheduler/slog"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -14,6 +15,12 @@ const (
 
 // instance globale du scheduler
 var appSched scheduleurState
+
+// WipView info taches en cours
+type WipView struct {
+	NextTask []string             `json:"next_task"`
+	Queues   map[int]WipQueueView `json:"queues"`
+}
 
 // represente le plannficateur de tache : il garde en mémoire
 // tous les elements pour la lancement de taches : définition
@@ -155,6 +162,36 @@ func UpdateSchedFromDb(typeName string, ID int) {
 	}
 }
 
+//GetViewState état pour dashboard
+func GetViewState() WipView {
+	var state WipView
+
+	//état des queues
+	if appSched.worker != nil {
+		state.Queues = appSched.worker.lastStateInfo
+	}
+
+	// prochaines tache à exec : il faut trier par date
+	state.NextTask = make([]string, 0)
+	dtList := make([]time.Time, 0)
+	for dt := range appSched.nextLaunchs.grpSchedsToLaunch {
+		dtList = append(dtList, dt)
+	}
+	sort.Slice(dtList, func(i, j int) bool { return dtList[i].Before(dtList[j]) })
+
+	//puis les date sont associé à ou plusieurs schedid, lié à un ou plusieurs tf
+	for idt := 0; (idt < len(dtList)) && (len(state.NextTask) < 30); idt++ { //liste 30 max pour le dash
+		if arr, exists := appSched.nextLaunchs.grpSchedsToLaunch[dtList[idt]]; exists {
+			for schedid := range arr {
+				for _, tf := range appSched.schedToTF[schedid] {
+					state.NextTask = append(state.NextTask, fmt.Sprintf("%v : %v", dtList[idt], appSched.taskflowsLst[tf].Lib))
+				}
+			}
+		}
+	}
+	return state
+}
+
 // pumpSched est la boucle principale de gestion des taches
 func pumpSched() {
 	// init données requises pour la gestion en mémoire
@@ -199,6 +236,9 @@ func pumpSched() {
 			//recalc sched si modifié
 			if e.dType == "DbSched" {
 				calcNextLaunch()
+			} else if e.dType == "DbQueue" {
+				//changement état qu'une queue peut affecter le worker (état pause)
+				appSched.worker.UpdateList()
 			}
 		case <-appSched.stopRequestCh:
 			//arret du scheduleur
