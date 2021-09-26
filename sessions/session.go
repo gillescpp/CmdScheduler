@@ -20,7 +20,7 @@ type Session struct {
 	Role            string
 	RightLevel      int
 	SessionId       string
-	Data            map[string]interface{} //donnée attachés générique
+	Data            map[string]interface{} //eventuelles données attachés
 	lastActivity    time.Time
 	sessionDuration *time.Duration //durée inactivité autorisé du store
 }

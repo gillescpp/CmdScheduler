@@ -1,9 +1,9 @@
 package dal
 
 import (
+	"CmdScheduler/slog"
 	"database/sql"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -34,6 +34,9 @@ func InitDb(driver string, datasource string, schema string) error {
 	MainDB, err = sql.Open(dbDriver, datasource)
 	if err != nil {
 		return fmt.Errorf("open DB : %w", err)
+	}
+	if strings.EqualFold(dbDriver, "sqlite3") {
+		MainDB.SetMaxOpenConns(1)
 	}
 	return initDbTables()
 }
@@ -77,7 +80,7 @@ func updDbVersion(dbversion *int) error {
 // initDbTables modif DML avec maj vcersion db
 func versionedDML(newVersion int, curVersion *int, sql string) error {
 	if *curVersion < newVersion {
-		log.Println("Upgrade db q", newVersion, "...")
+		slog.Trace("dal", "Update dc schema v %v...", newVersion)
 		_, err := MainDB.Exec(sql)
 		if err == nil {
 			*curVersion = newVersion
@@ -175,9 +178,9 @@ func initDbTables() error {
 			type VARCHAR(20),
 			timeout INT,
 			log_store VARCHAR(50),
-			cmd VARCHAR(250),
-			args VARCHAR(250),
-			start_in VARCHAR(250),
+			cmd VARCHAR(500),
+			args VARCHAR(500),
+			start_in VARCHAR(500),
 			exec_on VARCHAR(250),
 			created_at datetime, created_by int,
 			updated_at datetime, updated_by int
@@ -257,6 +260,7 @@ func initDbTables() error {
 		lib VARCHAR(100),
 		tags VARCHAR(100),
 		activ int,
+		named_args VARCHAR(500),
 		manuallaunch int,
 		scheduleid int,
 		err_management int,

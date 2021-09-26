@@ -5,8 +5,11 @@ import (
 	"CmdScheduler/dal"
 	"CmdScheduler/schd"
 	"CmdScheduler/sessions"
+	"CmdScheduler/slog"
 	"encoding/hex"
 	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -15,22 +18,30 @@ import (
 )
 
 func main() {
+	//init log
+	flog, _ := os.Getwd()
+	flog = filepath.Join(flog, "log")
+	os.MkdirAll(flog, os.ModePerm)
+	flog = filepath.Join(flog, "CmdScheduler.txt")
+	slog.InitLogs(flog, 20, 3, false)
+
 	//lecture config
 	err := readConfig()
 	if err != nil {
-		log.Fatalln("readConfig", err)
+		slog.Fatal("main", "readConfig %v", err)
 	}
 
 	//prepa db
+	slog.Trace("main", "Starting...")
 	err = dal.InitDb(viper.GetString("db_driver"), viper.GetString("db_datasource"), viper.GetString("db_schema"))
 	if err != nil {
-		log.Fatalln("InitDb", err)
+		slog.Fatal("main", "InitDb %v", err)
 	}
 
 	//init session key
 	err = initSessionKey()
 	if err != nil {
-		log.Fatalln("initSessionKey", err)
+		slog.Fatal("main", "initSessionKey %v", err)
 	}
 
 	//init sessions store
@@ -42,13 +53,12 @@ func main() {
 	sessions.InitSessionStore(sesDuration)
 
 	//goroutine de maintenance
-	tickerCache := time.NewTicker(time.Minute)
+	tickerCache := time.NewTicker(time.Duration(10) * time.Minute)
 	go func() {
-		for c := range tickerCache.C {
+		for {
+			<-tickerCache.C
 			//ras des sessions périmés
-			if c.Minute()%10 == 0 {
-				sessions.Purge()
-			}
+			sessions.Purge()
 		}
 	}()
 
@@ -59,7 +69,7 @@ func main() {
 	//Mise en écoute de l'interface REST
 	restPort := viper.GetInt("http_port")
 	strListenOn := ":" + strconv.Itoa(restPort)
-	log.Println("Listening on", strListenOn, "...")
+	slog.Trace("main", "Listening on %v...", strListenOn)
 	log.Fatal(ctrl.ListenAndServe(strListenOn))
 }
 

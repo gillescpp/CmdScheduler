@@ -3,10 +3,10 @@ package ctrl
 import (
 	"CmdScheduler/dal"
 	"CmdScheduler/sessions"
+	"CmdScheduler/slog"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
@@ -44,7 +44,10 @@ func getBearerToken(r *http.Request) string {
 }
 
 // secMiddleWare middleware pour la gestion de la sécurité
-func secMiddleWare(crudCode string, cors bool, next httprouter.Handle) httprouter.Handle {
+type altAutorisation func(*sessions.Session) bool
+
+// secMiddleWare middleware pour la gestion de la sécurité
+func secMiddleWare(crudCode string, fnChekAllowed altAutorisation, cors bool, next httprouter.Handle) httprouter.Handle {
 	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		// adjonction cors
 		if cors {
@@ -60,7 +63,7 @@ func secMiddleWare(crudCode string, cors bool, next httprouter.Handle) httproute
 
 		var s *sessions.Session
 		// auth middleware, check token
-		if crudCode != "" {
+		if crudCode != "" || fnChekAllowed != nil {
 			//extraction token passé en "Authorization: Bearer <TOKEN>"
 			token := getBearerToken(r)
 
@@ -71,11 +74,19 @@ func secMiddleWare(crudCode string, cors bool, next httprouter.Handle) httproute
 				return
 			}
 
-			//check test role user, on déduit le fait que ce soit une tentative de modif/insertion/delete de part le verbe
-			edit := r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" || r.Method == "DELETE"
-			if !dal.IsAutorised(dal.RightLevel(s.RightLevel), crudCode, edit) {
-				w.WriteHeader(http.StatusForbidden)
-				return
+			if fnChekAllowed == nil {
+				//check test role user, on déduit le fait que ce soit une tentative de modif/insertion/delete de part le verbe
+				edit := r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" || r.Method == "DELETE"
+				if !dal.IsAutorised(dal.RightLevel(s.RightLevel), crudCode, edit) {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+			} else {
+				//methode d'autorisation no standard fourni
+				if !fnChekAllowed(s) {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
 			}
 		}
 
@@ -130,7 +141,7 @@ func writeStdJSONCreated(w http.ResponseWriter, locationURL, ID string, payload 
 //writeStdJSONOK réponse ok std
 func writeStdJSONOK(w http.ResponseWriter, payload interface{}) {
 	if payload != nil {
-		writeStdJSONResp(w, http.StatusCreated, payload)
+		writeStdJSONResp(w, http.StatusOK, payload)
 	} else {
 		writeStdJSONResp(w, http.StatusOK, JSONStdResponse{
 			Error:  "",
@@ -183,7 +194,7 @@ func writeStdJSONUnauthorized(w http.ResponseWriter, errMsg string) {
 //panicHandler cas des requetes qui léverait un panic (evite que le program crash)
 func panicHandler(w http.ResponseWriter, r *http.Request, err interface{}) {
 	http.Error(w, fmt.Sprintln("Error", err), http.StatusInternalServerError)
-	log.Println("Panic :", err)
+	slog.Warning("api", "Panic handled %v...", err)
 }
 
 //ping handler test connectivité

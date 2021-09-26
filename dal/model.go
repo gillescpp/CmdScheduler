@@ -221,16 +221,16 @@ func (c *DbAgent) Evaluate() error {
 
 // DbTask task
 type DbTask struct {
-	ID       int    `json:"id"`
-	Lib      string `json:"lib" apiuse:"search,sort" dbfield:"TASK.lib"`
-	Type     string `json:"type" apiuse:"search,sort" dbfield:"TASK.type"`
-	Timeout  int    `json:"timeout" dbfield:"TASK.timeout"`
-	LogStore string `json:"log_store" apiuse:"search,sort" dbfield:"TASK.log_store"`
-	Cmd      string `json:"cmd" apiuse:"search,sort" dbfield:"TASK.cmd"`
-	Args     string `json:"args" dbfield:"TASK.args"`
-	StartIn  string `json:"start_in" dbfield:"TASK.start_in"`
-	ExecOn   []int  `json:"exec_on" dbfield:"TASK.exec_on"` // liste agent d'execution prenant en charge la cmd
-	Info     string `json:"info"`
+	ID       int      `json:"id"`
+	Lib      string   `json:"lib" apiuse:"search,sort" dbfield:"TASK.lib"`
+	Type     string   `json:"type" apiuse:"search,sort" dbfield:"TASK.type"`
+	Timeout  int      `json:"timeout" dbfield:"TASK.timeout"`
+	LogStore string   `json:"log_store" apiuse:"search,sort" dbfield:"TASK.log_store"`
+	Cmd      string   `json:"cmd" apiuse:"search,sort" dbfield:"TASK.cmd"`
+	Args     []string `json:"args" dbfield:"TASK.args"`
+	StartIn  string   `json:"start_in" dbfield:"TASK.start_in"`
+	ExecOn   []int    `json:"exec_on" dbfield:"TASK.exec_on"` // liste agent d'execution prenant en charge la cmd
+	Info     string   `json:"info"`
 }
 
 // Validate pour controle de validité
@@ -257,7 +257,7 @@ func (c *DbTask) Validate(Create bool) error {
 	if c.Cmd == "" {
 		return fmt.Errorf("invalid cmd")
 	}
-	c.Args = strings.TrimSpace(c.Args)
+	//c.Args = clearStrs(c.Args) // on prend tous les argument fourni
 	c.StartIn = strings.TrimSpace(c.StartIn)
 	c.ExecOn = clearInts(c.ExecOn)
 
@@ -363,14 +363,15 @@ const (
 
 // DbTaskFlow description tache à executer
 type DbTaskFlow struct {
-	ID           int    `json:"id"`
-	Lib          string `json:"lib" apiuse:"search,sort" dbfield:"TASKFLOW.lib"`
-	Tags         []int  `json:"tags" apiuse:"search,sort" dbfield:"TASKFLOW.tags"`
-	Activ        bool   `json:"activ" apiuse:"search,sort" dbfield:"TASKFLOW.activ"`
-	ManualLaunch bool   `json:"manuallaunch" apiuse:"search,sort" dbfield:"TASKFLOW.manuallaunch"`
-	ScheduleID   int    `json:"scheduleid" apiuse:"search" dbfield:"TASKFLOW.scheduleid"`
-	ErrMngt      int    `json:"err_management" apiuse:"search" dbfield:"TASKFLOW.err_management"`
-	QueueID      int    `json:"queueid" apiuse:"search" dbfield:"TASKFLOW.queueid"`
+	ID           int               `json:"id"`
+	Lib          string            `json:"lib" apiuse:"search,sort" dbfield:"TASKFLOW.lib"`
+	Tags         []int             `json:"tags" apiuse:"search,sort" dbfield:"TASKFLOW.tags"`
+	NamedArgs    map[string]string `json:"named_args" dbfield:"TASKFLOW.named_args"`
+	Activ        bool              `json:"activ" apiuse:"search,sort" dbfield:"TASKFLOW.activ"`
+	ManualLaunch bool              `json:"manuallaunch" apiuse:"search,sort" dbfield:"TASKFLOW.manuallaunch"`
+	ScheduleID   int               `json:"scheduleid" apiuse:"search" dbfield:"TASKFLOW.scheduleid"`
+	ErrMngt      int               `json:"err_management" apiuse:"search" dbfield:"TASKFLOW.err_management"`
+	QueueID      int               `json:"queueid" apiuse:"search" dbfield:"TASKFLOW.queueid"`
 
 	LastStart  time.Time `json:"last_start" apiuse:"search" dbfield:"TASKFLOW.last_start"`
 	LastStop   time.Time `json:"last_stop" apiuse:"search" dbfield:"TASKFLOW.last_stop"`
@@ -404,6 +405,7 @@ func (c *DbTaskFlow) Validate(Create bool) error {
 		return fmt.Errorf("invalid lib")
 	}
 	c.Tags = clearInts(c.Tags)
+	c.NamedArgs = clearMap(c.NamedArgs)
 
 	// check détail
 	if len(c.Detail) == 0 {

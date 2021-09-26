@@ -2,131 +2,150 @@ package schd
 
 import (
 	"CmdScheduler/dal"
+	"CmdScheduler/slog"
 	"fmt"
 	"sync"
 	"time"
 )
 
-//DbSchedState structure support tache à executer
-type DbSchedState struct {
-	dal.DbSched
+const (
+	periodCalc = time.Minute * 30 // période pré calculé des prochains sched id à traiter
+)
 
-	//copy queue et tache associé
-	Queue    dal.DbQueue
-	TaskFlow dal.DbTaskFlow
+// instance globale du scheduler
+var appSched scheduleurState
 
-	//flag todo
-	NeedDbUpdate bool
+// represente le plannficateur de tache : il garde en mémoire
+// tous les elements pour la lancement de taches : définition
+// de celles-ci et plannfication en place
+// pumpSched sert de boucle principale :
+// * chargement/mise à jour des elements en mémoire (maj sur notif notifié par les controleur de l'api)
+// * lancement des taches associé à schedid dont l'heure calculé est atteinte
+// * chan start/stop
+type scheduleurState struct {
+	memMutex sync.Mutex
 
-	NextExec   time.Time
-	Running    bool
-	Queued     bool
-	ValidError error
-}
+	//objet gerant la file d'execution piloté par la plannif
+	worker *Worker
 
-//tableau de l'état des taches actives
-type schState struct {
-	taskMutex     sync.Mutex
-	schedList     map[int]*DbSchedState
-	schedListInit bool
+	//config en cours en mémoire
+	schedLst     map[int]*dal.DbSched    // plannifs pilotant les exec
+	agentsLst    map[int]*dal.DbAgent    // liste des agents
+	queueLst     map[int]*dal.DbQueue    // liste des queue
+	tasksLst     map[int]*dal.DbTask     // liste des taches
+	taskflowsLst map[int]*dal.DbTaskFlow // liste des workflow
+	schedToTF    map[int][]int           // lien schedid = liste des taches actives à lancer liés
+
+	//prochain lancement calculé
+	schdFrom        time.Time //date d'origine
+	checkTick       *time.Ticker
+	nextLaunchs     *nextExec
+	nextRefreshCalc time.Time //date de rajout de calcules/rajout des prochaines dates
 
 	//chan de pilotage
 	checkDbCh      chan chNotifyChange //demande maj from db tache x ou 0 pour tout
 	instantStartTf chan int            //demande démarrage immédiat d'une tache
-	stopRequestCh  chan bool
-	terminatedCh   chan bool
+	stopRequestCh  chan bool           //chan demande arret (appel stop)
+	terminatedCh   chan bool           //chan acquitement arret
 }
 
-// instance scheduler
-var appSched schState
-
-// chNotifyChange pour les notif de changement de donnée
+// chNotifyChange typage notif changement de donnée
 type chNotifyChange struct {
 	dType string
 	ID    int
 }
 
-//pumpSched est la boucle principale de gestion des tache
-func pumpSched() {
+// nextExec object pour gerer la liste des sched id à lancer à un instant t
+type nextExec struct {
+	grpSchedsToLaunch map[time.Time][]int //map date = liste des schedid concerné par cette date
+}
 
-	appSched.schedList = make(map[int]*DbSchedState)
-	appSched.checkDbCh = make(chan chNotifyChange, 10)
-	appSched.instantStartTf = make(chan int)
-	appSched.stopRequestCh = make(chan bool)
-	appSched.terminatedCh = make(chan bool)
-
-	// init taches à executer
-	updateSchedFromDb(0)
-
-	//boucle de travail :
-	for {
-		select {
-		/*case e := <-appSched.checkDbCh:
-
-		//flag de la tache comme à mettre à jour (action realisé par proceedSched quand taches en question dispo)
-		if appSched.schedListInit {
-			if e.dType == "DbSched" {
-				//modif d'un sched
-				if _, exists := appSched.schedList[e.ID]; exists {
-					appSched.schedList[e.ID].NeedDbUpdate = true // todo mutex a utiliser
-				}
-			} else if e.dType == "DbTaskFlow" || e.dType == "DbQueue" {
-				for i := range appSched.schedList {
-					if (e.dType == "DbTaskFlow" && appSched.schedList[i].TaskFlowID == e.ID) || (e.dType == "DbQueue" && appSched.schedList[i].QueueID == e.ID) {
-						appSched.schedList[e.ID].NeedDbUpdate = true // todo mutex a utiliser
-					}
-				}
-
-			}
-		}
-		*/
-		/* 		case periodid := <-appSched.instantStartTf:
-		//flag de la tache comme à démarrer (action realisé par proceedSched quand taches en question dispo)
-		if appSched.schedListInit {
-			if _, exists := appSched.schedList[periodid]; exists {
-				appSched.schedList[periodid].InstantStart = true // todo mutex a utiliser
-			}
-		} */
-		case <-appSched.stopRequestCh:
-			//arret du scheduleur
-			fmt.Println("Sched stop request")
-			//debloque le stop en attente
-			close(appSched.terminatedCh)
-			return
-
-		case <-time.After(time.Second):
-			//parcours des taches en cours
-			appSched.taskMutex.Lock()
-			if !appSched.schedListInit {
-				//tant que liste des taches pa init
-				updateSchedFromDb(0) //TODO log err ?
-			} else {
-				proceedSched()
-			}
-			appSched.taskMutex.Unlock()
-		}
+// nextExec création nextExec
+func newNextExec() *nextExec {
+	return &nextExec{
+		grpSchedsToLaunch: map[time.Time][]int{},
 	}
 }
 
-//Stop démarra le scheduleur
+// ajout d'un schedid a executer à l'heure t
+func (c *nextExec) add(t time.Time, s int) {
+	if t.IsZero() {
+		return
+	}
+
+	exists := false
+	if c.grpSchedsToLaunch[t] == nil {
+		c.grpSchedsToLaunch[t] = make([]int, 0)
+	} else {
+		for _, scid := range c.grpSchedsToLaunch[t] {
+			if scid == s {
+				exists = true
+				break
+			}
+		}
+	}
+	if !exists {
+		c.grpSchedsToLaunch[t] = append(c.grpSchedsToLaunch[t], s)
+	}
+}
+
+// popSchedIdBefore retourne et supprime les sched id a traiter (dt <= t) avec la date programmé
+func (c *nextExec) popSchedIdBefore(t time.Time) map[int]time.Time {
+	var mpSchedId map[int]time.Time
+	for k := range c.grpSchedsToLaunch {
+		//on revoie les chedid de toutes les dates dépassé dédoublonnée
+		if k.Equal(t) || k.Before(t) {
+			if mpSchedId == nil {
+				mpSchedId = make(map[int]time.Time)
+			}
+			for _, scid := range c.grpSchedsToLaunch[k] {
+				mpSchedId[scid] = k
+			}
+			//suppression elements traité
+			delete(c.grpSchedsToLaunch, k)
+		}
+	}
+	return mpSchedId
+}
+
+// popSchedIdAfter retourne et supprime les sched id a traiter dont dt > t
+func (c *nextExec) popSchedIdAfter(t time.Time) map[int]bool {
+	var mpSchedId map[int]bool
+	for k := range c.grpSchedsToLaunch {
+		//on revoie les chedid de toutes les dates dépassé dédoublonnée
+		if k.After(t) {
+			if mpSchedId == nil {
+				mpSchedId = make(map[int]bool)
+			}
+			for _, scid := range c.grpSchedsToLaunch[k] {
+				mpSchedId[scid] = true
+			}
+			//suppression elements traité
+			delete(c.grpSchedsToLaunch, k)
+		}
+	}
+	return mpSchedId
+}
+
+//Stop démarre le scheduleur
 func Stop() {
 	if appSched.stopRequestCh != nil {
-		//demande et attente
+		//demande et attente acq arret
 		appSched.stopRequestCh <- true
 		<-appSched.terminatedCh
-		fmt.Println("Sched terminated")
+		slog.Trace("sched", "Scheduler terminated")
 	}
 }
 
-//Start démarra le scheduleur
+//Start démarre le scheduleur
 func Start() {
 	Stop()
+	slog.Trace("sched", "Scheduler starting")
 	//lancement traitement
-	fmt.Println("Sched starting")
 	go pumpSched()
 }
 
-//UpdateSchedFromDb programme les eventuelles maj de tache a effectuer
+//UpdateSchedFromDb permet de notifier le scheduleur d'une modifs des données
 func UpdateSchedFromDb(typeName string, ID int) {
 	if appSched.checkDbCh != nil {
 		appSched.checkDbCh <- chNotifyChange{
@@ -136,146 +155,308 @@ func UpdateSchedFromDb(typeName string, ID int) {
 	}
 }
 
-//InstantStart demande d'un démarrage immédiat
-/* func InstantStart(periodid int) {
-	if appSched.instantStartTf != nil {
-		appSched.instantStartTf <- periodid
-	}
-} */
+// pumpSched est la boucle principale de gestion des taches
+func pumpSched() {
+	// init données requises pour la gestion en mémoire
+	appSched.schedLst = make(map[int]*dal.DbSched)
+	appSched.agentsLst = make(map[int]*dal.DbAgent)
+	appSched.queueLst = make(map[int]*dal.DbQueue)
+	appSched.tasksLst = make(map[int]*dal.DbTask)
+	appSched.taskflowsLst = make(map[int]*dal.DbTaskFlow)
 
-//updateSchedFromDb met à jour une tache depuis la bdd
-func updateSchedFromDb(periodid int) error {
-	//recup état de la planning à mettre à jour (tout si periodid==0)
-	q := dal.SearchQuery{
-		Limit:  2000,
-		Offset: 0,
-	}
-	if periodid > 0 {
-		q.SQLFilter = "id = ?"
-		q.SQLParams = []interface{}{periodid}
-	} else {
-		q.SQLFilter = "(activ = 1 and deleted_at is null)"
-	}
+	appSched.checkDbCh = make(chan chNotifyChange, 10)
+	appSched.instantStartTf = make(chan int)
+	appSched.stopRequestCh = make(chan bool)
+	appSched.terminatedCh = make(chan bool)
 
-	/*arr, _, err := dal.SchedList(q)
-	if err != nil {
-		return fmt.Errorf("Sched updateSchedFromDb : " + err.Error())
-	}*/
+	appSched.nextLaunchs = newNextExec()
 
-	updated := make(map[int]bool)
-	/*for _, e := range arr {
-			//on ne garde que les taches actives
-			updated[e.ID] = true
-			if !e.Activ || e.Deleted {
-				delete(appSched.schedList, e.ID)
-			} else {
-				//recup sched, queue et taskflow
-				var (
-					q    dal.DbQueue
-					tf   dal.DbTaskFlow
-					vErr error
-				)
-				vErr = e.Validate(false) //tache invalide mis en mémoire mais non traitable
-				if vErr == nil && e.QueueID > 0 {
-					q, vErr = dal.QueueGet(e.QueueID)
-					if vErr == nil && q.Deleted {
-						vErr = fmt.Errorf("Queue %v [%v] disabled", q.ID, q.Lib)
-					}
-					if vErr == nil {
-						vErr = q.Validate(false)
-					}
-				}
-				if vErr == nil {
-					tf, vErr = dal.TaskFlowGet(e.TaskFlowID)
-					if vErr == nil && tf.Deleted {
-						vErr = fmt.Errorf("TaskFlow %v [%v] disabled", tf.ID, tf.Lib)
-					}
-					if vErr == nil {
-						vErr = tf.Validate(false)
-					}
-				}
+	appSched.worker = NewWorker()
 
-				//maj info en mémoire
-				if appSched.schedList[e.ID] == nil {
-					appSched.schedList[e.ID] = &DbSchedState{}
-				}
-				appSched.schedList[e.ID].Activ = (vErr == nil)
-				appSched.schedList[e.ID].ValidError = vErr
-				appSched.schedList[e.ID].TaskFlowID = tf.ID
-				appSched.schedList[e.ID].TaskFlow = tf
-				appSched.schedList[e.ID].QueueID = q.ID
-				appSched.schedList[e.ID].Queue = q
-				appSched.schedList[e.ID].ErrLevel = e.ErrLevel
-				appSched.schedList[e.ID].ID = e.ID
-				appSched.schedList[e.ID].LastStart = e.LastStart
-				appSched.schedList[e.ID].LastStop = e.LastStop
-				appSched.schedList[e.ID].LastResult = e.LastResult
-				appSched.schedList[e.ID].LastMsg = e.LastMsg
-				appSched.schedList[e.ID].NeedDbUpdate = false
-				appSched.schedList[e.ID].Detail = make([]dal.DbSchedDetail, len(e.Detail))
-				copy(appSched.schedList[e.ID].Detail, e.Detail)
+	appSched.schdFrom = time.Now()
+
+	// init entités en mémoire
+	updateEntitiesFromDb("*", 0)
+
+	// lancement routine de lancement des taches
+	go func() {
+		appSched.worker.pumpWork()
+	}()
+
+	//1er calcul plannif
+	calcNextLaunch()
+
+	//ticker pour les check régulier des prochaines taches a lancer
+	appSched.checkTick = time.NewTicker(time.Second)
+	slog.Trace("sched", "Scheduler ready")
+
+	//boucle de travail :
+	for {
+		select {
+		case e := <-appSched.checkDbCh:
+			//traitement notif de modif des données
+			updateEntitiesFromDb(e.dType, e.ID)
+			//recalc sched si modifié
+			if e.dType == "DbSched" {
+				calcNextLaunch()
 			}
-	}*/
+		case <-appSched.stopRequestCh:
+			//arret du scheduleur
+			slog.Trace("sched", "Scheduler stopping...")
+			appSched.checkTick.Stop()
+			//arret des traitement en cours, avec période de grace de 6s
+			appSched.worker.abort = true
+			for i := 0; i < 30 && appSched.worker.on; i++ {
+				time.Sleep(time.Millisecond * 200)
+			}
 
-	//si maj full, on vire les flaggués
-	if periodid == 0 {
-		for k := range appSched.schedList {
-			if updated[k] {
-				delete(appSched.schedList, k)
+			//debloque le stop en attente
+			close(appSched.terminatedCh)
+			return
+
+		case ct := <-appSched.checkTick.C:
+			appSched.memMutex.Lock()
+			mpSchedId := appSched.nextLaunchs.popSchedIdBefore(ct)
+			appSched.memMutex.Unlock()
+			if len(mpSchedId) > 0 {
+				//Lancement des taches planifiés associés
+				for schedid, t := range mpSchedId {
+					launchTFBySchedId(schedid, t)
+				}
+			}
+			appSched.schdFrom = ct
+			if ct.After(appSched.nextRefreshCalc) {
+				// maintient liste des plannifs fournies
+				calcNextLaunch()
 			}
 		}
-		appSched.schedListInit = true
 	}
+}
 
+//updateEntitiesFromDb maj entites bdd en mémoire
+func updateEntitiesFromDb(entName string, id int) error {
+	appSched.memMutex.Lock()
+	defer func() {
+		appSched.memMutex.Unlock()
+	}()
+
+	//taches
+	if (entName == "*") || (entName == "DbTask") {
+		f := dal.SearchQuery{
+			Limit:  0,
+			Offset: 0,
+		}
+		if id > 0 {
+			f.SQLFilter = "TASK.id = ?"
+			f.SQLParams = []interface{}{id}
+		}
+		updated := make(map[int]bool)
+		resp, _, err := dal.TaskList(f)
+		if err != nil {
+			return fmt.Errorf("updateEntitiesFromDb DbTask : " + err.Error())
+		}
+		//maj tableau
+		for e := range resp {
+			appSched.tasksLst[resp[e].ID] = &resp[e]
+			updated[resp[e].ID] = true
+		}
+		//suppression des elements obsoletes
+		if id == 0 {
+			for _, e := range appSched.tasksLst {
+				if _, exists := updated[e.ID]; !exists {
+					delete(appSched.tasksLst, e.ID)
+				}
+			}
+		} else if _, exists := updated[id]; !exists {
+			delete(appSched.tasksLst, id)
+		}
+	}
+	//taskflows
+	if (entName == "*") || (entName == "DbTaskFlow") {
+		f := dal.SearchQuery{
+			Limit:  0,
+			Offset: 0,
+		}
+		if id > 0 {
+			f.SQLFilter = "TASKFLOW.id = ?"
+			f.SQLParams = []interface{}{id}
+		}
+		updated := make(map[int]bool)
+		resp, _, err := dal.TaskFlowList(f)
+		if err != nil {
+			return fmt.Errorf("updateEntitiesFromDb DbTaskFlow : " + err.Error())
+		}
+		//maj tableau
+		for e := range resp {
+			appSched.taskflowsLst[resp[e].ID] = &resp[e]
+			updated[resp[e].ID] = true
+		}
+		//suppression des elements obsoletes
+		if id == 0 {
+			for _, e := range appSched.taskflowsLst {
+				if _, exists := updated[e.ID]; !exists {
+					delete(appSched.taskflowsLst, e.ID)
+				}
+			}
+		} else if _, exists := updated[id]; !exists {
+			delete(appSched.taskflowsLst, id)
+		}
+		//on établie un lien sched id = liste de TF concerné
+		appSched.schedToTF = make(map[int][]int)
+		for idx, tf := range appSched.taskflowsLst {
+			if tf.Activ && tf.ScheduleID > 0 {
+				if appSched.schedToTF[tf.ScheduleID] == nil {
+					appSched.schedToTF[tf.ScheduleID] = make([]int, 0)
+				}
+				appSched.schedToTF[tf.ScheduleID] = append(appSched.schedToTF[tf.ScheduleID], idx)
+			}
+		}
+	}
+	//agent
+	if (entName == "*") || (entName == "DbAgent") {
+		f := dal.SearchQuery{
+			Offset: 0,
+			Limit:  0,
+		}
+		if id > 0 {
+			f.SQLFilter = "AGENT.id = ?"
+			f.SQLParams = []interface{}{id}
+		}
+		updated := make(map[int]bool)
+		resp, _, err := dal.AgentList(f)
+		if err != nil {
+			return fmt.Errorf("updateEntitiesFromDb DbAgent : " + err.Error())
+		}
+		//maj tableau
+		for e := range resp {
+			appSched.agentsLst[resp[e].ID] = &resp[e]
+			updated[resp[e].ID] = true
+		}
+		//suppression des elements obsoletes
+		if id == 0 {
+			for _, e := range appSched.agentsLst {
+				if _, exists := updated[e.ID]; !exists {
+					delete(appSched.agentsLst, e.ID)
+				}
+			}
+		} else if _, exists := updated[id]; !exists {
+			delete(appSched.agentsLst, id)
+		}
+	}
+	//queues
+	if (entName == "*") || (entName == "DbQueue") {
+		f := dal.SearchQuery{
+			Limit:  0,
+			Offset: 0,
+		}
+		if id > 0 {
+			f.SQLFilter = "QUEUE.id = ?"
+			f.SQLParams = []interface{}{id}
+		}
+		updated := make(map[int]bool)
+		resp, _, err := dal.QueueList(f)
+		if err != nil {
+			return fmt.Errorf("updateEntitiesFromDb DbAgent : " + err.Error())
+		}
+		//maj tableau
+		for e := range resp {
+			appSched.queueLst[resp[e].ID] = &resp[e]
+			updated[resp[e].ID] = true
+		}
+		//suppression des elements obsoletes
+		if id == 0 {
+			for _, e := range appSched.queueLst {
+				if _, exists := updated[e.ID]; !exists {
+					delete(appSched.queueLst, e.ID)
+				}
+			}
+		} else if _, exists := updated[id]; !exists {
+			delete(appSched.queueLst, id)
+		}
+	}
+	//sched
+	if (entName == "*") || (entName == "DbSched") {
+		f := dal.SearchQuery{
+			Limit:     0,
+			Offset:    0,
+			SQLFilter: "PERIOD.type = 1", //type sched seulement
+		}
+		if id > 0 {
+			f.SQLFilter += " AND PERIOD.id = ?"
+			f.SQLParams = []interface{}{id}
+		}
+		updated := make(map[int]bool)
+		resp, _, err := dal.SchedList(f)
+		if err != nil {
+			return fmt.Errorf("updateEntitiesFromDb DbSched : " + err.Error())
+		}
+		//maj tableau
+		for e := range resp {
+			appSched.schedLst[resp[e].ID] = &resp[e]
+			updated[resp[e].ID] = true
+		}
+		//suppression des elements obsoletes
+		if id == 0 {
+			for _, e := range appSched.schedLst {
+				if _, exists := updated[e.ID]; !exists {
+					delete(appSched.schedLst, e.ID)
+				}
+			}
+		} else if _, exists := updated[id]; !exists {
+			delete(appSched.schedLst, id)
+		}
+	}
 	return nil
 }
 
-//proceedSched traite la liste des taches à executer
-func proceedSched() {
-	dtRef := time.Now()
+//calcNextLaunch calcul des prochaines dates de démarrage
+func calcNextLaunch() {
+	appSched.memMutex.Lock()
+	defer func() {
+		appSched.memMutex.Unlock()
+	}()
 
-	for _, v := range appSched.schedList {
-		if v.ValidError == nil && !v.Running && !v.Queued { //tache non valide non traité
-			if v.NeedDbUpdate {
-				//maj info depuis db
-				if err := updateSchedFromDb(v.ID); err != nil {
-					fmt.Println("Sched", v.ID, "Err DB", err)
+	//ras des dates futures existantes qu'on va recalculer
+	appSched.nextLaunchs.popSchedIdAfter(appSched.schdFrom)
+
+	// on calcule les prochaines dates sur une periode a venir donnée
+	calcTo := appSched.schdFrom.Add(periodCalc)
+	// date à partir de laquelle rajouter des nouvelle dates afin d'avoir
+	//toujours des dates à venir en visu
+	appSched.nextRefreshCalc = appSched.schdFrom.Add(periodCalc / 2)
+	for s := range appSched.schedLst {
+		calcnext := true
+		tmpfrom := appSched.schdFrom
+		for calcnext {
+			next := appSched.schedLst[s].CalcNextLaunch(tmpfrom) // ne renvoie rien si > 1 an
+			if !next.IsZero() {
+				if next.After(calcTo) {
+					calcnext = false
+				} else {
+					tmpfrom = next
+					appSched.nextLaunchs.add(next, s)
 				}
-				v.NeedDbUpdate = false
-			} else if v.NextExec.IsZero() {
-				//calcul date à exec
-				v.NextExec = v.CalcNextLaunch(dtRef)
-			} else if v.NextExec.Before(dtRef) {
-				//date dépassé, on lance la tache
-				go startSchedTask(v.ID)
+			} else {
+				calcnext = false
 			}
 		}
 	}
-
 }
 
-//startSchedTask lance une tache
-func startSchedTask(periodid int) {
-	s := appSched.schedList[periodid]
-	s.Running = true
-	defer func() {
-		s.Running = false
-	}()
+//launchTFBySchedId lancement tache active associé à un schedid
+func launchTFBySchedId(schedid int, dtRef time.Time) {
+	for _, tf := range appSched.schedToTF[schedid] {
+		ptf := prepareTF(appSched.taskflowsLst[tf], fmt.Sprintf("Schedule ID %v", schedid), dtRef, false)
+		slog.Trace("sched", "Scheduler %v, push taskflow %v", schedid, ptf.Ident)
+		appSched.worker.ProceedTF(ptf)
+	}
+}
 
-	//démarrage immédiat
-	/*
-		if s.QueueID <= 0 {
-			fmt.Println("Starting", periodid, s.NextExec, "taskflow", s.TaskFlow.Lib)
-			s.NextExec = time.Time{} //raz pour recalcul
-			time.Sleep(2 * time.Second)
-
-		} else {
-			// ajout a fil d'attente
-			fmt.Println("Queueing", periodid, s.NextExec, "taskflow", s.TaskFlow.Lib)
-			s.NextExec = time.Time{} //raz pour recalcul
-			// TODO
-			time.Sleep(2 * time.Second)
-		}
-	*/
-	fmt.Println("Terminated", periodid, "taskflow", s.TaskFlow.Lib)
+//ManualLaunchTF lancement tache depuis api
+func ManualLaunchTF(tfID int, usr string) {
+	if _, exists := appSched.taskflowsLst[tfID]; exists {
+		ptf := prepareTF(appSched.taskflowsLst[tfID], fmt.Sprintf("Manual launch by %v", usr), time.Now(), true)
+		slog.Trace("api", "push taskflow %v by %v", ptf.Ident, usr)
+		appSched.worker.ProceedTF(ptf)
+	}
 }

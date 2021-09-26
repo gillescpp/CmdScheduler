@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"CmdScheduler/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +61,7 @@ func readConfig() error {
 		return err //1 fichier requis
 	}
 
-	log.Println("Read", cfgPathToUse)
+	slog.Trace("main", "Read %v", cfgPathToUse)
 	viper.SetConfigFile(cfgPathToUse)
 	err = viper.ReadInConfig()
 	if err != nil {

@@ -67,7 +67,7 @@ func TaskList(filter SearchQuery) ([]DbTask, PagedResponse, error) {
 			Timeout:  int(timeout.Int64),
 			LogStore: logStore.String,
 			Cmd:      cmd.String,
-			Args:     args.String,
+			Args:     strsFromJSON(args.String),
 			StartIn:  startIn.String,
 			ExecOn:   splitIntFromStr(execOn.String),
 			Info:     stdInfo(&loginC, &loginU, nil, &createdAt, &updatedAt, nil),
@@ -104,7 +104,7 @@ func TaskUpdate(elm DbTask, usrUpdater int) error {
 		, start_in = ?, exec_on = ?
 		where id = ? `
 	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, elm.Type, elm.Timeout, elm.LogStore,
-		elm.Cmd, elm.Args, elm.StartIn, mergeIntToStr(elm.ExecOn), elm.ID)
+		elm.Cmd, strsToJSON(&elm.Args), elm.StartIn, mergeIntToStr(elm.ExecOn), elm.ID)
 	if err != nil {
 		return fmt.Errorf("TaskUpdate err %w", err)
 	}

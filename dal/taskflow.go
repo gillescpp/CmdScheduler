@@ -31,6 +31,7 @@ func TaskFlowList(filter SearchQuery) ([]DbTaskFlow, PagedResponse, error) {
 	, TASKFLOW.activ, TASKFLOW.manuallaunch, TASKFLOW.scheduleid
 	, TASKFLOW.err_management, TASKFLOW.queueid, TASKFLOW.last_start
 	, TASKFLOW.last_stop, TASKFLOW.last_result, TASKFLOW.last_msg
+	, TASKFLOW.named_args
 	, USERC.login as loginC, TASKFLOW.created_at
 	, USERU.login as loginU, TASKFLOW.updated_at	
 	FROM ` + tblPrefix + `TASKFLOW TASKFLOW 
@@ -57,6 +58,7 @@ func TaskFlowList(filter SearchQuery) ([]DbTaskFlow, PagedResponse, error) {
 		lastStop      sql.NullTime
 		lastResult    sql.NullInt64
 		lastMsg       sql.NullString
+		namedArgs     sql.NullString
 		createdAt     sql.NullTime
 		updatedAt     sql.NullTime
 		loginC        sql.NullString
@@ -65,7 +67,7 @@ func TaskFlowList(filter SearchQuery) ([]DbTaskFlow, PagedResponse, error) {
 
 	for rows.Next() {
 		err = rows.Scan(&id, &lib, &tags, &activ, &manuallaunch, &scheduleID, &errManagement,
-			&queueID, &lastStart, &lastStop, &lastResult, &lastMsg,
+			&queueID, &lastStart, &lastStop, &lastResult, &lastMsg, &namedArgs,
 			&loginC, &createdAt, &loginU, &updatedAt)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("TaskFlowList scan %w", err)
@@ -75,6 +77,7 @@ func TaskFlowList(filter SearchQuery) ([]DbTaskFlow, PagedResponse, error) {
 			Lib:          lib.String,
 			Tags:         splitIntFromStr(tags.String),
 			Activ:        (activ.Int64 == 1),
+			NamedArgs:    mapFromJSON(namedArgs.String),
 			ManualLaunch: (manuallaunch.Int64 == 1),
 			ScheduleID:   int(scheduleID.Int64),
 			ErrMngt:      int(errManagement.Int64),
@@ -168,10 +171,11 @@ func TaskFlowUpdate(elm DbTaskFlow, usrUpdater int, transaction bool) error {
 
 	q := `UPDATE ` + tblPrefix + `TASKFLOW SET updated_by = ?, updated_at = ? 
 		, lib = ?, tags = ? , activ = ?, manuallaunch = ?
-		, scheduleid = ?, err_management = ?, queueid = ?	
+		, scheduleid = ?, err_management = ?, queueid = ?, named_args = ?	
 		where id = ? `
 	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, mergeIntToStr(elm.Tags),
-		elm.Activ, elm.ManualLaunch, elm.ScheduleID, elm.ErrMngt, elm.QueueID, elm.ID)
+		elm.Activ, elm.ManualLaunch, elm.ScheduleID, elm.ErrMngt, elm.QueueID,
+		mapToJSON(&elm.NamedArgs), elm.ID)
 	if err != nil {
 		return fmt.Errorf("TaskFlowUpdate err %w", err)
 	}
@@ -264,6 +268,18 @@ func TaskFlowInsert(elm *DbTaskFlow, usrUpdater int) error {
 	_, err = MainDB.Exec(`COMMIT TRANSACTION`)
 	if err != nil {
 		return fmt.Errorf("TaskFlowInsert err %w", err)
+	}
+	return nil
+}
+
+// TaskFlowUpdate maj état d'un tf aprés exec
+func TaskFlowUpdateLastState(taskflowId int, start, stop time.Time, result int, msg string) error {
+	q := `UPDATE ` + tblPrefix + `TASKFLOW SET last_start = ?, last_stop = ? 
+		, last_result = ?, last_msg = ?
+		where id = ? `
+	_, err := MainDB.Exec(q, start, stop, result, msg, taskflowId)
+	if err != nil {
+		return fmt.Errorf("TaskFlowUpdateLastState err %w", err)
 	}
 	return nil
 }

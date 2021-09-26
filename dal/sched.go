@@ -203,14 +203,14 @@ func SchedDelete(elmID int, usrUpdater int) error {
 		MainDB.Exec(`ROLLBACK TRANSACTION`)
 	}()
 
-	q := `DELETE FROM ` + tblPrefix + `PERIODDETAIL where id = ? `
-	_, err = MainDB.Exec(q, usrUpdater, time.Now(), elmID)
+	q := `DELETE FROM ` + tblPrefix + `PERIODDETAIL where periodid = ? `
+	_, err = MainDB.Exec(q, elmID)
 	if err != nil {
 		return fmt.Errorf("SchedDelete err %w", err)
 	}
 
 	q = `DELETE FROM ` + tblPrefix + `PERIOD where id = ? `
-	_, err = MainDB.Exec(q, usrUpdater, time.Now(), elmID)
+	_, err = MainDB.Exec(q, elmID)
 	if err != nil {
 		return fmt.Errorf("SchedDelete err %w", err)
 	}

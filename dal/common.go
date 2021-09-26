@@ -2,6 +2,7 @@ package dal
 
 import (
 	"database/sql"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -256,6 +257,54 @@ func clearStrs(in []string) []string {
 		}
 	}
 	return out
+}
+
+// clearMap suppresion clé vide
+func clearMap(in map[string]string) map[string]string {
+	out := make(map[string]string)
+	for k, v := range in {
+		k = strings.ToUpper(strings.TrimSpace(k))
+		if k != "" {
+			out[k] = strings.TrimSpace(v)
+		}
+	}
+	return out
+}
+
+// mapToJSON map stocké en js en bdd
+func mapToJSON(in *map[string]string) string {
+	if len(*in) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(in)
+	return string(b)
+}
+
+// mapToJSON map stocké en js en bdd
+func mapFromJSON(in string) map[string]string {
+	ret := make(map[string]string)
+	if in != "" {
+		json.Unmarshal([]byte(in), &ret)
+	}
+	return ret
+}
+
+// strsToJSON []string stocké en js en bdd
+func strsToJSON(in *[]string) string {
+	if len(*in) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(in)
+	return string(b)
+}
+
+// strsFromJSON []string stocké en js en bdd
+func strsFromJSON(in string) []string {
+	ret := make([]string, 0)
+	if in != "" {
+		json.Unmarshal([]byte(in), &ret)
+	}
+	return ret
 }
 
 // splitIntFromStr split chaine "1, 5, k, 48" en [1, 5, 48]
