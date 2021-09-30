@@ -182,7 +182,7 @@ func GetViewState() WipView {
 	//puis les date sont associé à ou plusieurs schedid, lié à un ou plusieurs tf
 	for idt := 0; (idt < len(dtList)) && (len(state.NextTask) < 30); idt++ { //liste 30 max pour le dash
 		if arr, exists := appSched.nextLaunchs.grpSchedsToLaunch[dtList[idt]]; exists {
-			for schedid := range arr {
+			for _, schedid := range arr {
 				for _, tf := range appSched.schedToTF[schedid] {
 					state.NextTask = append(state.NextTask, fmt.Sprintf("%v : %v", dtList[idt], appSched.taskflowsLst[tf].Lib))
 				}

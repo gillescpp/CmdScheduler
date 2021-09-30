@@ -176,7 +176,7 @@ func prepareTF(tf *dal.DbTaskFlow, launchInfo string, dtRef time.Time, manualLau
 			//check agent d'execution spécifié, récup du premier existant
 			//todo : pourrait aussi s'appuyer sur un état des agents s'il existe un jour
 			agent := 0
-			for a := range appSched.tasksLst[ptf.Detail[i].TaskID].ExecOn {
+			for _, a := range appSched.tasksLst[ptf.Detail[i].TaskID].ExecOn {
 				if _, exists := appSched.agentsLst[a]; exists {
 					if !appSched.agentsLst[a].Deleted {
 						agent = a
