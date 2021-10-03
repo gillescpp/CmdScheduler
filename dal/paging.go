@@ -450,10 +450,13 @@ func (c paramSearchQuery) StringToType(input string) interface{} {
 		if e == nil && v > 0 {
 			ret = &v
 		}
-	case "bool":
-		v, e := strconv.Atoi(input)
-		if e == nil {
-			b := (v != 0)
+	case "bool": //truie/false/0/1
+		if strings.EqualFold(input, "true") || strings.EqualFold(input, "1") {
+			//b := true //la bdd utile des int pour les boolean
+			b := 1
+			ret = &b
+		} else if strings.EqualFold(input, "false") || strings.EqualFold(input, "0") {
+			b := 0
 			ret = &b
 		}
 	case "float":

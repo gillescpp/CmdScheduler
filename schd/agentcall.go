@@ -105,7 +105,7 @@ func (c *PreparedTF) proceedTaskFlow(feedback chan<- wipInfo) {
 						}
 					}
 				}
-				// todo : else délai d'attente expiré?, demande de kill ?
+				// todo : else délai d'attente expiré?
 				//maxDuration := time.Duration(c.Detail[nextIdxB0].Task.Timeout) * time.Second
 				//if (maxDuration>0) && (time.Since(tstart) > maxDuration) {
 				//}

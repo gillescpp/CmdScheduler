@@ -33,6 +33,7 @@ type WipQueueView struct {
 	Paused     bool   `json:"paused"`
 	Waiting    int    `json:"waiting"`
 	Processing int    `json:"processing"`
+	Size       int    `json:"size"`
 }
 
 // Represente la partie execution des taches
@@ -265,19 +266,6 @@ func (c *PreparedTF) start(feedback chan<- wipInfo) {
 	}(feedback)
 }
 
-// cantExec déclare un tf terminé car non executable
-/*
-func (c *PreparedTF) cantExec(err string) {
-	c.State = StateTerminated
-	c.Result = -1
-	c.ResultMsg = err
-	c.CantLaunch = err
-	if !c.StartAt.IsZero() {
-		c.StopAt = time.Now()
-	}
-}
-*/
-
 //ProceedTF ajoute la TF à la liste des tache à executer
 func (w *Worker) ProceedTF(tf *PreparedTF) {
 	if tf == nil || tf.Ident == "" || w.taskList == nil {
@@ -317,6 +305,7 @@ func (w *Worker) UpdateList() {
 type QueueState struct {
 	Processing  bool //tache en cours d'exec
 	Paused      bool
+	Size        int
 	Name        string
 	dtUpdated   time.Time
 	toLaunchCpt int
@@ -357,11 +346,13 @@ func (w *Worker) initQueueState(zeroCpt bool) {
 				Paused:      false,
 				dtUpdated:   time.Time{},
 				toLaunchCpt: 0,
+				Size:        0,
 			}
 			slog.Trace("sched", "Init queue %v", qid)
 		}
 		w.queueState[qid].dtUpdated = dtRef
 		w.queueState[qid].Name = qptr.Lib
+		w.queueState[qid].Size = qptr.MaxSize
 		//check mise en pause
 		if w.queueState[qid].Paused != qptr.PausedManual {
 			w.queueState[qid].Paused = qptr.PausedManual
@@ -475,10 +466,11 @@ func (w *Worker) updateTaskList() {
 	newStateView := make(map[int]WipQueueView)
 	newStateView[0] = WipQueueView{
 		ID:         0,
-		Lib:        "immediate",
+		Lib:        "direct",
 		Paused:     false,
 		Waiting:    iCptWaiting[0],
 		Processing: iCptProcessing[0],
+		Size:       0,
 	}
 
 	// si une place s'est liberé dans un queue,on lance le prochain
@@ -489,6 +481,7 @@ func (w *Worker) updateTaskList() {
 			Paused:     w.queueState[qid].Paused,
 			Waiting:    iCptWaiting[qid],
 			Processing: iCptProcessing[qid],
+			Size:       w.queueState[qid].Size,
 		}
 	}
 	w.lastStateInfo = newStateView
