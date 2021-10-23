@@ -26,7 +26,15 @@ const (
 type wipInfo struct {
 }
 
-// WipQueueView info taches en cours
+// WipTaskView info taches en cours
+type WipTaskView struct {
+	ID    int       `json:"id"`
+	Lib   string    `json:"lib"`
+	Queue int       `json:"queue"`
+	State WorkState `json:"state"`
+}
+
+// WipQueueView info taches en cours sur un queue
 type WipQueueView struct {
 	ID         int    `json:"id"`
 	Lib        string `json:"lib"`
@@ -56,8 +64,9 @@ type Worker struct {
 
 	queueState map[int]*QueueState //états des queues + directe en clé 0
 
-	lastStateInfo  map[int]WipQueueView //informatif seulement
-	lastStateCheck time.Time            //dernier maj liste
+	lastQueueStateInfo map[int]WipQueueView //informatif seulement
+	lastTaskStateInfo  []WipTaskView        //informatif seulement
+	lastStateCheck     time.Time            //dernier maj liste
 }
 
 // NewWorker instance worker
@@ -486,12 +495,12 @@ func (w *Worker) updateTaskList() {
 	}
 
 	// bilan queue
-	newStateView := make(map[int]WipQueueView)
+	newQueueStateView := make(map[int]WipQueueView)
 	for qid := range w.queueState {
 		w.queueState[qid].Processing = w.queueState[qid].tmpProcessing
 		w.queueState[qid].toLaunchCpt = w.queueState[qid].tmpToLaunchCpt
 
-		newStateView[qid] = WipQueueView{
+		newQueueStateView[qid] = WipQueueView{
 			ID:         qid,
 			Lib:        w.queueState[qid].Name,
 			Paused:     w.queueState[qid].Paused,
@@ -500,7 +509,20 @@ func (w *Worker) updateTaskList() {
 			Size:       w.queueState[qid].MaxSize,
 		}
 	}
-	w.lastStateInfo = newStateView
+	//recup des taches en cours
+	newTaskStateView := make([]WipTaskView, 0)
+	for e := w.taskList.Front(); e != nil; e = e.Next() {
+		tf := e.Value.(*PreparedTF)
+		newTaskStateView = append(newTaskStateView, WipTaskView{
+			ID:    tf.TFID,
+			Lib:   tf.TFLib,
+			Queue: tf.QueueID,
+			State: tf.State,
+		})
+	}
+
+	w.lastQueueStateInfo = newQueueStateView
+	w.lastTaskStateInfo = newTaskStateView
 	w.lastStateCheck = time.Now()
 
 	// si une place s'est liberé dans un queue, on lance un nouveau check

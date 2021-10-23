@@ -20,6 +20,7 @@ var appSched scheduleurState
 type WipView struct {
 	NextTask []string             `json:"next_task"`
 	Queues   map[int]WipQueueView `json:"queues"`
+	Tasks    []WipTaskView        `json:"tasks"`
 }
 
 // represente le plannficateur de tache : il garde en mémoire
@@ -166,9 +167,10 @@ func UpdateSchedFromDb(typeName string, ID int) {
 func GetViewState() WipView {
 	var state WipView
 
-	//état des queues
+	//état des queues & taches
 	if appSched.worker != nil {
-		state.Queues = appSched.worker.lastStateInfo
+		state.Queues = appSched.worker.lastQueueStateInfo
+		state.Tasks = appSched.worker.lastTaskStateInfo
 	}
 
 	// prochaines tache à exec : il faut trier par date

@@ -161,8 +161,17 @@ func NewSearchQueryFromRequest(r *http.Request, structInfo interface{}, FromForm
 
 	//rien a faire
 	if len(urlVals) == 0 {
+		//tri par defaut
+		sort := ""
+		for _, f := range dbfields {
+			if f.Sortable {
+				sort = f.DbName + " ASC"
+				break
+			}
+		}
 		return SearchQuery{
-			Limit: DefaultRecordPerPage,
+			Limit:   DefaultRecordPerPage,
+			SQLSort: sort,
 		}
 	}
 
