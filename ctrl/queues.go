@@ -102,7 +102,7 @@ func apiQueuePut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		return
 	}
 
-	err = dal.QueueUpdate(elm, 0, false)
+	err = dal.QueueUpdate(elm, 0, false, nil)
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return

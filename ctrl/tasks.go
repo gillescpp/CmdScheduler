@@ -102,7 +102,7 @@ func apiTaskPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		return
 	}
 
-	err = dal.TaskUpdate(elm, getUsrIdFromCtx(r))
+	err = dal.TaskUpdate(elm, getUsrIdFromCtx(r), nil)
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return

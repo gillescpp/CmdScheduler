@@ -18,7 +18,7 @@ func readConfig() error {
 	viper.SetDefault("Title", "Cmd Scheduler")
 	viper.SetDefault("db_driver", "sqlite3")
 	viper.SetDefault("db_datasource", "file:data.db")
-	viper.SetDefault("db_schema", "SCHED")
+	viper.SetDefault("db_prefix", "SCHED")
 
 	//on s'appui sur viper :
 	//nom du fichier de config = fourni en param

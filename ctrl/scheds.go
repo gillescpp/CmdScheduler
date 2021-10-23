@@ -102,7 +102,7 @@ func apiSchedPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		return
 	}
 
-	err = dal.SchedUpdate(elm, 0, true)
+	err = dal.SchedUpdate(elm, 0, true, nil)
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return

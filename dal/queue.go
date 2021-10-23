@@ -31,8 +31,8 @@ func QueueList(filter SearchQuery) ([]DbQueue, PagedResponse, error) {
 		, USERC.login as loginC, QUEUE.created_at
 		, USERU.login as loginU, QUEUE.updated_at
 		FROM ` + tblPrefix + `QUEUE QUEUE 
-		left join  ` + tblPrefix + `USER USERC on USERC.id = QUEUE.created_by
-		left join  ` + tblPrefix + `USER USERU on USERU.id = QUEUE.updated_by		
+		left join  ` + tblPrefix + `USR USERC on USERC.id = QUEUE.created_by
+		left join  ` + tblPrefix + `USR USERU on USERU.id = QUEUE.updated_by		
 		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
@@ -93,7 +93,7 @@ func QueueGet(id int) (DbQueue, error) {
 }
 
 // QueueUpdate maj queue
-func QueueUpdate(elm DbQueue, usrUpdater int, admin bool) error {
+func QueueUpdate(elm DbQueue, usrUpdater int, admin bool, tx *sql.Tx) error {
 	var pausedfrom sql.NullTime
 	if elm.PausedManual {
 		if elm.PausedManualFrom.IsZero() {
@@ -106,7 +106,7 @@ func QueueUpdate(elm DbQueue, usrUpdater int, admin bool) error {
 		updated_by = ?, updated_at = ? 
 		, lib = ?, size = ?, timeout = ?, pausedfrom= ?, noexecwhile_queuelist = ?
 		where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, elm.MaxSize, elm.MaxDuration,
+	_, err := TxExec(tx, q, usrUpdater, time.Now(), elm.Lib, elm.MaxSize, elm.MaxDuration,
 		pausedfrom, mergeIntToStr(elm.NoExecWhile), elm.ID)
 	if err != nil {
 		return fmt.Errorf("QueueUpdate err %w", err)
@@ -118,7 +118,7 @@ func QueueUpdate(elm DbQueue, usrUpdater int, admin bool) error {
 // QueueDelete suppression
 func QueueDelete(elmID int, usrUpdater int) error {
 	q := `DELETE FROM ` + tblPrefix + `QUEUE where id = ? `
-	_, err := MainDB.Exec(q, elmID)
+	_, err := TxExec(nil, q, elmID)
 	if err != nil {
 		return fmt.Errorf("QueueDelete err %w", err)
 	}
@@ -127,33 +127,27 @@ func QueueDelete(elmID int, usrUpdater int) error {
 
 // QueueInsert insertion queue
 func QueueInsert(elm *DbQueue, usrUpdater int) error {
-	_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+	tx, err := MainDB.Begin()
 	if err != nil {
 		return fmt.Errorf("QueueInsert err %w", err)
 	}
-	defer func() {
-		MainDB.Exec(`ROLLBACK TRANSACTION`)
-	}()
+	defer tx.Rollback()
 
 	//insert base
 	q := `INSERT INTO ` + tblPrefix + `QUEUE (created_by, created_at) VALUES(?,?) `
-	res, err := MainDB.Exec(q, usrUpdater, time.Now())
-	if err != nil {
-		return fmt.Errorf("QueueInsert err %w", err)
-	}
-	id, err := res.LastInsertId()
+	id, err := TxInsert(tx, q, usrUpdater, time.Now())
 	if err != nil {
 		return fmt.Errorf("QueueInsert err %w", err)
 	}
 
 	//mj pour le reste des champs
 	elm.ID = int(id)
-	err = QueueUpdate(*elm, usrUpdater, true)
+	err = QueueUpdate(*elm, usrUpdater, true, tx)
 	if err != nil {
 		return fmt.Errorf("QueueInsert err %w", err)
 	}
 
-	_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("QueueInsert err %w", err)
 	}

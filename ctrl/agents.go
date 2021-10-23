@@ -102,7 +102,7 @@ func apiAgentPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		return
 	}
 
-	err = dal.AgentUpdate(elm, getUsrIdFromCtx(r))
+	err = dal.AgentUpdate(elm, getUsrIdFromCtx(r), nil)
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return

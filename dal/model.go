@@ -1,7 +1,7 @@
 package dal
 
 import (
-	"crypto/tls"
+	"CmdScheduler/agent"
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
@@ -20,13 +20,13 @@ const (
 
 // DbUser model utilisateur, table USER
 type DbUser struct {
-	ID           int    `json:"id"`
-	Name         string `json:"name" apiuse:"search,sort" dbfield:"USER.name"`
-	Login        string `json:"login" apiuse:"search,sort" dbfield:"USER.login"` // unique, mis à null en cas de desactivation
+	ID           int    `json:"id" apiuse:"search,sort" dbfield:"USR.id"`
+	Name         string `json:"name" apiuse:"search,sort" dbfield:"USR.name"`
+	Login        string `json:"login" apiuse:"search,sort" dbfield:"USR.login"` // unique, mis à null en cas de desactivation
 	RightLevel   int    `json:"rightlevel"`
 	Password     string `json:"password,omitempty"`
 	PasswordHash string `json:"-"` //non publié, usage interne auth
-	Deleted      bool   `json:"deleted" apiuse:"search,sort" dbfield:"USER.deleted_at"`
+	Deleted      bool   `json:"deleted" apiuse:"search,sort" dbfield:"USR.deleted_at"`
 	Info         string `json:"info"`
 }
 
@@ -97,7 +97,7 @@ func (c *DbUser) Validate(Create bool) error {
 
 // DbAgent agent
 type DbAgent struct {
-	ID                 int    `json:"id"`
+	ID                 int    `json:"id" apiuse:"search,sort" dbfield:"AGENT.id"`
 	Host               string `json:"host" apiuse:"search,sort" dbfield:"AGENT.host"` // format http(s)://ip::port
 	APIKey             string `json:"apikey" dbfield:"AGENT.apikey"`
 	CertSignAllowed    string `json:"certsign" apiuse:"search,sort" dbfield:"AGENT.certsignallowed"` // signature de certificat autorisé (cert non valide car autosigné)
@@ -108,7 +108,7 @@ type DbAgent struct {
 	EvalResultCertOK   bool   `json:"evalresultcert"`                                                //info res eval du host
 	EvalResultInfo     string `json:"evalresultinfo"`                                                //info res eval du host
 	Info               string `json:"info"`
-	Deleted            bool   `json:"deleted" apiuse:"search,sort" dbfield:"USER.deleted_at"`
+	Deleted            bool   `json:"deleted" apiuse:"search,sort" dbfield:"AGENT.deleted_at"`
 }
 
 // Validate pour controle de validité
@@ -142,13 +142,6 @@ func (c *DbAgent) Evaluate() error {
 	c.EvalResultCertOK = false
 
 	//interro...
-	insClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-		Timeout: time.Second * 5,
-	}
-
 	pingurl := c.Host + "/task/ping"
 	req, err := http.NewRequest("GET", pingurl, nil)
 	if err != nil {
@@ -158,7 +151,7 @@ func (c *DbAgent) Evaluate() error {
 
 	if !evalStop {
 		req.Header.Add("X-Api-Key", c.APIKey)
-		resp, err := insClient.Do(req)
+		resp, err := agent.DoHttpRequest(req, agent.AgentQueryTimeout, true, "")
 		if err != nil {
 			evalInfo = append(evalInfo, fmt.Sprintf("request error : %v", err.Error()))
 			evalStop = true
@@ -221,7 +214,7 @@ func (c *DbAgent) Evaluate() error {
 
 // DbTask task
 type DbTask struct {
-	ID       int      `json:"id"`
+	ID       int      `json:"id" apiuse:"search,sort" dbfield:"TASK.id"`
 	Lib      string   `json:"lib" apiuse:"search,sort" dbfield:"TASK.lib"`
 	Type     string   `json:"type" apiuse:"search,sort" dbfield:"TASK.type"`
 	Timeout  int      `json:"timeout" dbfield:"TASK.timeout"`
@@ -273,7 +266,7 @@ func (c *DbTask) Validate(Create bool) error {
 
 // DbTag tag
 type DbTag struct {
-	ID    int    `json:"id"`
+	ID    int    `json:"id" apiuse:"search,sort" dbfield:"TAG.id"`
 	Lib   string `json:"lib" apiuse:"search,sort" dbfield:"TAG.lib"`
 	Group string `json:"group" apiuse:"search,sort" dbfield:"TAG.tgroup"` //libellé du groupe
 	Info  string `json:"info"`
@@ -317,7 +310,7 @@ func (c *DbTag) Validate(Create bool) error {
 
 // DbQueue queue
 type DbQueue struct {
-	ID          int    `json:"id"`
+	ID          int    `json:"id" apiuse:"search,sort" dbfield:"QUEUE.id"`
 	Lib         string `json:"lib" apiuse:"search,sort" dbfield:"QUEUE.lib"`
 	MaxSize     int    `json:"size" apiuse:"search,sort" dbfield:"QUEUE.size"` // taille de fil max
 	MaxDuration int    `json:"timeout" dbfield:"QUEUE.timeout"`                // en ms
@@ -363,7 +356,7 @@ const (
 
 // DbTaskFlow description tache à executer
 type DbTaskFlow struct {
-	ID           int               `json:"id"`
+	ID           int               `json:"id" apiuse:"search,sort" dbfield:"TASKFLOW.id"`
 	Lib          string            `json:"lib" apiuse:"search,sort" dbfield:"TASKFLOW.lib"`
 	Tags         []int             `json:"tags" apiuse:"search,sort" dbfield:"TASKFLOW.tags"`
 	NamedArgs    map[string]string `json:"named_args" dbfield:"TASKFLOW.named_args"`
@@ -445,7 +438,7 @@ func (c *DbTaskFlowDetail) Validate(Create bool, DetailListSize int) error {
 //              - type intervalle : execution toutes les n minutes
 //              - type heure fixe : execution à heure donnée
 type DbSched struct {
-	ID       int    `json:"id"`
+	ID       int    `json:"id" apiuse:"search,sort" dbfield:"PERIOD.id"`
 	Lib      string `json:"lib" apiuse:"search,sort" dbfield:"PERIOD.lib"`
 	IsPeriod bool   `json:"is_period"` //db : type=0 pour les periode, 1 puor les planif
 	TimeZone string `json:"time_zone" apiuse:"search,sort" dbfield:"PERIOD.time_zone"`

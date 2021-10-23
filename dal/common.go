@@ -87,53 +87,6 @@ func GetRigthList(rightlevel RightLevel) map[string]RightView {
 	return ret
 }
 
-// Paging config paging pour listing
-type Paging struct {
-	Page       int    //n° de page
-	Sort       string //champs de tri
-	RowPerPage int    //nombre de libre par page
-}
-
-// AppendPaging Util gestion du paging
-func (c Paging) AppendPaging(sql string, rowcount int64) string {
-	// calcul offset
-	sqlReturn := sql
-	offset := 0
-	if rowcount <= 0 || c.RowPerPage <= 0 {
-		//pas de paging sans nombre de page, ou row/page
-		return sqlReturn
-	}
-	if c.Page > 0 && rowcount > 0 {
-		offset = (c.Page - 1) * c.RowPerPage
-	}
-
-	if strings.EqualFold(dbDriver, "mssql") {
-		// select * from <tabl>
-		// order by <>			tri imposé si utilisation de FETCH (il faut utiliser seulement OFFSET avec un TOP pour la limit dans ce cas)
-		// OFFSET 1 ROWS 		offset (0=a partir du premier, 1, du deuxieme)
-		// FETCH NEXT 3 ROWS ONLY -- row par page, order by obligatoire pour cett instruction
-		if c.Sort != "" {
-			sqlAppend := " order by " + c.Sort +
-				" OFFSET " + strconv.Itoa(offset) + " ROWS " +
-				" FETCH NEXT " + strconv.Itoa(c.RowPerPage) + " ROWS ONLY "
-
-			sqlReturn = sql + sqlAppend
-		} else {
-			sqlReturn = " select TOP " + strconv.Itoa(c.RowPerPage) + " * FROM (" + sql + ") T OFFSET " + strconv.Itoa(offset) + " ROWS "
-		}
-	} else {
-		// order by Sort LIMIT offset, row_count;
-		sqlAppend := ""
-		if c.Sort != "" {
-			sqlAppend += " order by " + c.Sort
-		}
-		sqlAppend += " LIMIT " + strconv.Itoa(offset) + ", " + strconv.Itoa(c.RowPerPage)
-
-		sqlReturn = sql + sqlAppend
-	}
-	return sqlReturn
-}
-
 // CfgKVGet getter table de config kv
 func CfgKVGet(key string) (string, error) {
 	var err error
@@ -156,16 +109,16 @@ func CfgKVSet(key string, val string) error {
 	var n sql.NullInt64
 	err = MainDB.QueryRow("SELECT 1 FROM "+tblPrefix+"CFG where KID = ?", key).Scan(&n)
 	if err == sql.ErrNoRows {
-		_, err = MainDB.Exec(`INSERT INTO `+tblPrefix+`CFG (KID, KVAL) VALUES(?, NULL) `, key)
+		_, err = TxExec(nil, `INSERT INTO `+tblPrefix+`CFG (KID, KVAL) VALUES(?, NULL) `, key)
 	}
 	if err != nil {
 		return err
 	}
 
 	if val == "" {
-		_, err = MainDB.Exec(`DELETE FROM `+tblPrefix+`CFG WHERE KID = ?`, key)
+		_, err = TxExec(nil, `DELETE FROM `+tblPrefix+`CFG WHERE KID = ?`, key)
 	} else {
-		_, err = MainDB.Exec(`UPDATE `+tblPrefix+`CFG SET KVAL = ? WHERE KID = ?`, val, key)
+		_, err = TxExec(nil, `UPDATE `+tblPrefix+`CFG SET KVAL = ? WHERE KID = ?`, val, key)
 	}
 	if err != nil {
 		return err
@@ -355,4 +308,34 @@ func mergeStrToStr(in []string) string {
 		out += strings.TrimSpace(v)
 	}
 	return out
+}
+
+// TxExec exec une requete avec tx fourni ou main db a defaut
+func TxExec(tx *sql.Tx, query string, args ...interface{}) (sql.Result, error) {
+	if tx != nil {
+		return tx.Exec(query, args...)
+	}
+	return MainDB.Exec(query, args...)
+}
+
+// TxInsert idem TxExec mais avec recup se l'id autoinc
+func TxInsert(tx *sql.Tx, query string, args ...interface{}) (int64, error) {
+	var iID sql.NullInt64
+	var err error
+	//recup id spec à mssql
+	if strings.EqualFold(dbDriver, "mssql") {
+		query += `; SELECT SCOPE_IDENTITY()`
+		if tx != nil {
+			err = tx.QueryRow(query, args...).Scan(&iID)
+		} else {
+			err = MainDB.QueryRow(query, args...).Scan(&iID)
+		}
+		return iID.Int64, err
+	}
+
+	res, err := TxExec(tx, query, args...)
+	if err == nil {
+		iID.Int64, err = res.LastInsertId()
+	}
+	return iID.Int64, err
 }

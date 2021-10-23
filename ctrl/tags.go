@@ -97,7 +97,7 @@ func apiTagPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		return
 	}
 
-	err = dal.TagUpdate(elm, getUsrIdFromCtx(r))
+	err = dal.TagUpdate(elm, getUsrIdFromCtx(r), nil)
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return

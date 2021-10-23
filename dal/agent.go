@@ -35,9 +35,9 @@ func AgentList(filter SearchQuery) ([]DbAgent, PagedResponse, error) {
 		, USERU.login as loginU, AGENT.updated_at
 		, USERD.login as loginD, AGENT.deleted_at
 		FROM ` + tblPrefix + `AGENT AGENT 
-		left join  ` + tblPrefix + `USER USERC on USERC.id = AGENT.created_by
-		left join  ` + tblPrefix + `USER USERU on USERU.id = AGENT.updated_by
-		left join  ` + tblPrefix + `USER USERD on USERD.id = AGENT.deleted_by
+		left join  ` + tblPrefix + `USR USERC on USERC.id = AGENT.created_by
+		left join  ` + tblPrefix + `USR USERU on USERU.id = AGENT.updated_by
+		left join  ` + tblPrefix + `USR USERD on USERD.id = AGENT.deleted_by
 		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
@@ -104,7 +104,7 @@ func AgentGet(id int) (DbAgent, error) {
 }
 
 // AgentUpdate maj user
-func AgentUpdate(elm DbAgent, usrUpdater int) error {
+func AgentUpdate(elm DbAgent, usrUpdater int, tx *sql.Tx) error {
 	strDelQ := ""
 	if !elm.Deleted {
 		strDelQ = ", deleted_by = NULL, deleted_at = NULL"
@@ -117,7 +117,7 @@ func AgentUpdate(elm DbAgent, usrUpdater int) error {
 		, host = ?, apikey = ?, certsignallowed = ?
 		where id = ? `
 
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Host, elm.APIKey, elm.CertSignAllowed, elm.ID)
+	_, err := TxExec(tx, q, usrUpdater, time.Now(), elm.Host, elm.APIKey, elm.CertSignAllowed, elm.ID)
 	if err != nil {
 		return fmt.Errorf("AgentUpdate err %w", err)
 	}
@@ -128,7 +128,7 @@ func AgentUpdate(elm DbAgent, usrUpdater int) error {
 // AgentDelete flag agent suppression
 func AgentDelete(elmID int, usrUpdater int) error {
 	q := `UPDATE ` + tblPrefix + `AGENT SET deleted_by = ?, deleted_at = ? where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elmID)
+	_, err := TxExec(nil, q, usrUpdater, time.Now(), elmID)
 	if err != nil {
 		return fmt.Errorf("AgentDelete err %w", err)
 	}
@@ -137,33 +137,27 @@ func AgentDelete(elmID int, usrUpdater int) error {
 
 // AgentInsert insertion agent
 func AgentInsert(elm *DbAgent, usrUpdater int) error {
-	_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+	tx, err := MainDB.Begin()
 	if err != nil {
 		return fmt.Errorf("AgentInsert err %w", err)
 	}
-	defer func() {
-		MainDB.Exec(`ROLLBACK TRANSACTION`)
-	}()
+	defer tx.Rollback()
 
 	//insert base
 	q := `INSERT INTO ` + tblPrefix + `AGENT (created_by, created_at) VALUES(?,?) `
-	res, err := MainDB.Exec(q, usrUpdater, time.Now())
-	if err != nil {
-		return fmt.Errorf("AgentInsert err %w", err)
-	}
-	id, err := res.LastInsertId()
+	id, err := TxInsert(tx, q, usrUpdater, time.Now())
 	if err != nil {
 		return fmt.Errorf("AgentInsert err %w", err)
 	}
 
 	//mj pour le reste des champs
 	elm.ID = int(id)
-	err = AgentUpdate(*elm, usrUpdater)
+	err = AgentUpdate(*elm, usrUpdater, tx)
 	if err != nil {
 		return fmt.Errorf("AgentInsert err %w", err)
 	}
 
-	_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("AgentInsert err %w", err)
 	}

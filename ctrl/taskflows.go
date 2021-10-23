@@ -102,7 +102,7 @@ func apiTaskFlowPut(w http.ResponseWriter, r *http.Request, p httprouter.Params)
 		return
 	}
 
-	err = dal.TaskFlowUpdate(elm, 0, true)
+	err = dal.TaskFlowUpdate(elm, 0, true, nil)
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return

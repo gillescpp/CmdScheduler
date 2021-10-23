@@ -30,8 +30,8 @@ func TagList(filter SearchQuery) ([]DbTag, PagedResponse, error) {
 		, USERC.login as loginC, TAG.created_at
 		, USERU.login as loginU, TAG.updated_at
 		FROM ` + tblPrefix + `TAG TAG 
-		left join  ` + tblPrefix + `USER USERC on USERC.id = TAG.created_by
-		left join  ` + tblPrefix + `USER USERU on USERU.id = TAG.updated_by
+		left join  ` + tblPrefix + `USR USERC on USERC.id = TAG.created_by
+		left join  ` + tblPrefix + `USR USERU on USERU.id = TAG.updated_by
 		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
@@ -85,12 +85,12 @@ func TagGet(id int) (DbTag, error) {
 }
 
 // TagUpdate maj tag
-func TagUpdate(elm DbTag, usrUpdater int) error {
+func TagUpdate(elm DbTag, usrUpdater int, tx *sql.Tx) error {
 	q := `UPDATE ` + tblPrefix + `TAG SET
 		updated_by = ?, updated_at = ? 
 		, lib = ?, tgroup = ?
 		where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, elm.Group, elm.ID)
+	_, err := TxExec(tx, q, usrUpdater, time.Now(), elm.Lib, elm.Group, elm.ID)
 	if err != nil {
 		return fmt.Errorf("TagUpdate err %w", err)
 	}
@@ -101,7 +101,7 @@ func TagUpdate(elm DbTag, usrUpdater int) error {
 // TagDelete flag tag suppression
 func TagDelete(elmID int, usrUpdater int) error {
 	q := `DELETE FROM ` + tblPrefix + `TAG where id = ? `
-	_, err := MainDB.Exec(q, elmID)
+	_, err := TxExec(nil, q, elmID)
 	if err != nil {
 		return fmt.Errorf("TagDelete err %w", err)
 	}
@@ -110,33 +110,27 @@ func TagDelete(elmID int, usrUpdater int) error {
 
 // TagInsert insertion tag
 func TagInsert(elm *DbTag, usrUpdater int) error {
-	_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+	tx, err := MainDB.Begin()
 	if err != nil {
 		return fmt.Errorf("TagInsert err %w", err)
 	}
-	defer func() {
-		MainDB.Exec(`ROLLBACK TRANSACTION`)
-	}()
+	defer tx.Rollback()
 
 	//insert base
 	q := `INSERT INTO ` + tblPrefix + `TAG (created_by, created_at) VALUES(?,?) `
-	res, err := MainDB.Exec(q, usrUpdater, time.Now())
-	if err != nil {
-		return fmt.Errorf("TagInsert err %w", err)
-	}
-	id, err := res.LastInsertId()
+	id, err := TxInsert(tx, q, usrUpdater, time.Now())
 	if err != nil {
 		return fmt.Errorf("TagInsert err %w", err)
 	}
 
 	//mj pour le reste des champs
 	elm.ID = int(id)
-	err = TagUpdate(*elm, usrUpdater)
+	err = TagUpdate(*elm, usrUpdater, tx)
 	if err != nil {
 		return fmt.Errorf("TagInsert err %w", err)
 	}
 
-	_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("TagInsert err %w", err)
 	}

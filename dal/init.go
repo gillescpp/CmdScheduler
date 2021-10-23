@@ -9,25 +9,25 @@ import (
 
 	//sqlite
 	_ "github.com/mattn/go-sqlite3"
+	//mssql
+	_ "github.com/denisenkom/go-mssqldb"
 )
 
 //instance globale bdd
 var (
 	MainDB    *sql.DB
 	tblPrefix string
-	dbSchema  string
 	dbDriver  string
 )
 
 // InitDb prepa bdd mais
-func InitDb(driver string, datasource string, schema string) error {
+func InitDb(driver string, datasource string, prefix string) error {
 	//conn/création
-	dbSchema = strings.ReplaceAll(strings.TrimSpace(schema), " ", "-")
+	dbPrefix := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(prefix), " ", "_"))
 	dbDriver = driver
-	tblPrefix = schema + "."
-	if strings.EqualFold(dbDriver, "sqlite3") {
-		dbSchema = ""
-		tblPrefix = ""
+	tblPrefix = ""
+	if dbPrefix != "" {
+		tblPrefix = dbPrefix + "_"
 	}
 
 	var err error
@@ -47,10 +47,10 @@ func updDbVersion(dbversion *int) error {
 	//init table config kv
 	if *dbversion <= 0 {
 		if strings.EqualFold(dbDriver, "mssql") {
-			initKv := `IF EXISTS (select 1 from INFORMATION_SCHEMA.TABLES
+			initKv := `IF NOT EXISTS (select 1 from INFORMATION_SCHEMA.TABLES
 			where TABLE_SCHEMA = ? AND TABLE_NAME = ?) 
 			CREATE TABLE ` + tblPrefix + `CFG (KID varchar(100), KVAL varchar(1000), PRIMARY KEY(KID)) `
-			_, err = MainDB.Exec(initKv, dbSchema, tblPrefix+"CFG")
+			_, err = MainDB.Exec(initKv, "dbo", tblPrefix+"CFG") //schema non géré
 		} else {
 			initKv := `CREATE TABLE IF NOT EXISTS ` + tblPrefix +
 				`CFG (KID varchar(100), KVAL varchar(1000), PRIMARY KEY(KID)) `
@@ -102,9 +102,13 @@ func initDbTables() error {
 		return err
 	}
 
+	dttype := "datetime"
 	autoinc := "INTEGER NOT NULL IDENTITY"
 	if strings.EqualFold(dbDriver, "sqlite3") {
 		autoinc = "INTEGER PRIMARY KEY"
+	}
+	if strings.EqualFold(dbDriver, "mssql") {
+		dttype = "datetime2"
 	}
 
 	// note : protection des nom de colonne non portable `` pour mysql, [] pour mssql
@@ -113,27 +117,27 @@ func initDbTables() error {
 
 	// USER, rightlevel indique un niveau de droit (system de droit basique)
 	iv := 1
-	sql := `CREATE ` + tblPrefix + `TABLE USER (
+	sql := `CREATE TABLE ` + tblPrefix + `USR (
 		id ` + autoinc + `,
 		name VARCHAR(150),      
 		login VARCHAR(60),      
 		rightlevel int,	        
 		password VARCHAR(60),   
-		deleted_at datetime, deleted_by int,
-		created_at datetime, created_by int,
-		updated_at datetime, updated_by int
+		deleted_at ` + dttype + `, deleted_by int,
+		created_at ` + dttype + `, created_by int,
+		updated_at ` + dttype + `, updated_by int
 		)`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
 
 	//login unic pour les comptes actif
-	sql = `CREATE UNIQUE INDEX IDX_CLI_UNIC_LOGIN ON ` + tblPrefix + `USER(login) where deleted_at is null`
+	sql = `CREATE UNIQUE INDEX IDX_CLI_UNIC_LOGIN ON ` + tblPrefix + `USR(login) where deleted_at is null`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
 
-	sql = `CREATE INDEX IDX_CLI_DELETED ON ` + tblPrefix + `USER(deleted_at)`
+	sql = `CREATE INDEX IDX_CLI_DELETED ON ` + tblPrefix + `USR(deleted_at)`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
@@ -158,9 +162,9 @@ func initDbTables() error {
 		host VARCHAR(150),             
 		apikey VARCHAR(260),
 		certsignallowed VARCHAR(512),
-		deleted_at datetime, deleted_by int,
-		created_at datetime, created_by int,
-		updated_at datetime, updated_by int
+		deleted_at ` + dttype + `, deleted_by int,
+		created_at ` + dttype + `, created_by int,
+		updated_at ` + dttype + `, updated_by int
 		)`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
@@ -182,8 +186,8 @@ func initDbTables() error {
 			args VARCHAR(500),
 			start_in VARCHAR(500),
 			exec_on VARCHAR(250),
-			created_at datetime, created_by int,
-			updated_at datetime, updated_by int
+			created_at ` + dttype + `, created_by int,
+			updated_at ` + dttype + `, updated_by int
 			)`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
@@ -194,8 +198,8 @@ func initDbTables() error {
 		id ` + autoinc + `,
 		lib VARCHAR(50),
 		tgroup VARCHAR(50),
-		created_at datetime, created_by int,
-		updated_at datetime, updated_by int
+		created_at ` + dttype + `, created_by int,
+		updated_at ` + dttype + `, updated_by int
 		)`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
@@ -212,10 +216,10 @@ func initDbTables() error {
 		lib VARCHAR(100),
 		size int,
 		timeout int,
-		pausedfrom datetime,
+		pausedfrom ` + dttype + `,
 		noexecwhile_queuelist varchar(100),
-		created_at datetime, created_by int,
-		updated_at datetime, updated_by int
+		created_at ` + dttype + `, created_by int,
+		updated_at ` + dttype + `, updated_by int
 		)`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
@@ -232,8 +236,8 @@ func initDbTables() error {
 		lib VARCHAR(100),
 		type int,
 		time_zone varchar(50),
-		created_at datetime, created_by int,
-		updated_at datetime, updated_by int
+		created_at ` + dttype + `, created_by int,
+		updated_at ` + dttype + `, updated_by int
 		)`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
@@ -265,12 +269,12 @@ func initDbTables() error {
 		scheduleid int,
 		err_management int,
 		queueid int,
-		last_start datetime,
-		last_stop datetime,
+		last_start ` + dttype + `,
+		last_stop ` + dttype + `,
 		last_result int,
-		last_msg varchar(500),
-		created_at datetime, created_by int,
-		updated_at datetime, updated_by int
+		last_msg varchar(4000),
+		created_at ` + dttype + `, created_by int,
+		updated_at ` + dttype + `, updated_by int
 		)`
 	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
@@ -307,11 +311,11 @@ func initDbTables() error {
 	//tache en cours
 	sql = `CREATE TABLE ` + tblPrefix + `WIP (
 		id INTEGER PRIMARY KEY,
-		created_at datetime,
-		updated_at datetime,
+		created_at ` + dttype + `,
+		updated_at ` + dttype + `,
 		state int,
-		start_at datetime,
-		stop_at datetime,
+		start_at ` + dttype + `,
+		stop_at ` + dttype + `,
 		msg varchar(500),
 		scheduled int,
 		agentid int

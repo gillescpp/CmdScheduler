@@ -30,8 +30,8 @@ func TaskList(filter SearchQuery) ([]DbTask, PagedResponse, error) {
 		, USERC.login as loginC, TASK.created_at
 		, USERU.login as loginU, TASK.updated_at
 		FROM ` + tblPrefix + `TASK TASK 
-		left join  ` + tblPrefix + `USER USERC on USERC.id = TASK.created_by
-		left join  ` + tblPrefix + `USER USERU on USERU.id = TASK.updated_by
+		left join  ` + tblPrefix + `USR USERC on USERC.id = TASK.created_by
+		left join  ` + tblPrefix + `USR USERU on USERU.id = TASK.updated_by
 		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
@@ -97,13 +97,13 @@ func TaskGet(id int) (DbTask, error) {
 }
 
 // TaskUpdate maj task
-func TaskUpdate(elm DbTask, usrUpdater int) error {
+func TaskUpdate(elm DbTask, usrUpdater int, tx *sql.Tx) error {
 	q := `UPDATE ` + tblPrefix + `TASK SET
 		updated_by = ?, updated_at = ?
 		, lib = ?, type = ?, timeout = ?, log_store = ?, cmd = ?, args = ?
 		, start_in = ?, exec_on = ?
 		where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, elm.Type, elm.Timeout, elm.LogStore,
+	_, err := TxExec(tx, q, usrUpdater, time.Now(), elm.Lib, elm.Type, elm.Timeout, elm.LogStore,
 		elm.Cmd, strsToJSON(&elm.Args), elm.StartIn, mergeIntToStr(elm.ExecOn), elm.ID)
 	if err != nil {
 		return fmt.Errorf("TaskUpdate err %w", err)
@@ -115,7 +115,7 @@ func TaskUpdate(elm DbTask, usrUpdater int) error {
 // TaskDelete flag task suppression
 func TaskDelete(elmID int, usrUpdater int) error {
 	q := `DELETE FROM ` + tblPrefix + `TASK where id = ? `
-	_, err := MainDB.Exec(q, elmID)
+	_, err := TxExec(nil, q, elmID)
 	if err != nil {
 		return fmt.Errorf("TaskDelete err %w", err)
 	}
@@ -124,33 +124,27 @@ func TaskDelete(elmID int, usrUpdater int) error {
 
 // TaskInsert insertion task
 func TaskInsert(elm *DbTask, usrUpdater int) error {
-	_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+	tx, err := MainDB.Begin()
 	if err != nil {
 		return fmt.Errorf("TaskInsert err %w", err)
 	}
-	defer func() {
-		MainDB.Exec(`ROLLBACK TRANSACTION`)
-	}()
+	defer tx.Rollback()
 
 	//insert base
 	q := `INSERT INTO ` + tblPrefix + `TASK (created_by, created_at) VALUES(?,?) `
-	res, err := MainDB.Exec(q, usrUpdater, time.Now())
-	if err != nil {
-		return fmt.Errorf("TaskInsert err %w", err)
-	}
-	id, err := res.LastInsertId()
+	id, err := TxInsert(tx, q, usrUpdater, time.Now())
 	if err != nil {
 		return fmt.Errorf("TaskInsert err %w", err)
 	}
 
 	//mj pour le reste des champs
 	elm.ID = int(id)
-	err = TaskUpdate(*elm, usrUpdater)
+	err = TaskUpdate(*elm, usrUpdater, tx)
 	if err != nil {
 		return fmt.Errorf("TaskInsert err %w", err)
 	}
 
-	_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("TaskInsert err %w", err)
 	}

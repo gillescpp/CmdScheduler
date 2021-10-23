@@ -31,8 +31,8 @@ func SchedList(filter SearchQuery) ([]DbSched, PagedResponse, error) {
 		, USERC.login as loginC, PERIOD.created_at
 		, USERU.login as loginU, PERIOD.updated_at
 		FROM ` + tblPrefix + `PERIOD PERIOD 
-		left join  ` + tblPrefix + `USER USERC on USERC.id = PERIOD.created_by
-		left join  ` + tblPrefix + `USER USERU on USERU.id = PERIOD.updated_by
+		left join  ` + tblPrefix + `USR USERC on USERC.id = PERIOD.created_by
+		left join  ` + tblPrefix + `USR USERU on USERU.id = PERIOD.updated_by
 		` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
@@ -143,15 +143,16 @@ func SchedGet(id int) (DbSched, error) {
 }
 
 // SchedUpdate maj sched
-func SchedUpdate(elm DbSched, usrUpdater int, transaction bool) error {
-	if transaction {
-		_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+func SchedUpdate(elm DbSched, usrUpdater int, transaction bool, tx *sql.Tx) error {
+	var err error
+	innertx := false
+	if tx == nil {
+		tx, err = MainDB.Begin()
 		if err != nil {
 			return fmt.Errorf("SchedUpdate err %w", err)
 		}
-		defer func() {
-			MainDB.Exec(`ROLLBACK TRANSACTION`)
-		}()
+		defer tx.Rollback()
+		innertx = true
 	}
 
 	typep := 0
@@ -161,14 +162,14 @@ func SchedUpdate(elm DbSched, usrUpdater int, transaction bool) error {
 	q := `UPDATE ` + tblPrefix + `PERIOD SET
 		updated_by = ?, updated_at = ?, lib = ?, type = ?, time_zone = ?
 		where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, typep, elm.TimeZone, elm.ID)
+	_, err = TxExec(tx, q, usrUpdater, time.Now(), elm.Lib, typep, elm.TimeZone, elm.ID)
 	if err != nil {
 		return fmt.Errorf("SchedUpdate err %w", err)
 	}
 
 	//detail par delete/insert
 	q = `DELETE FROM ` + tblPrefix + `PERIODDETAIL where periodid = ? `
-	_, err = MainDB.Exec(q, elm.ID)
+	_, err = TxExec(tx, q, elm.ID)
 	if err != nil {
 		return fmt.Errorf("SchedUpdate err %w", err)
 	}
@@ -176,15 +177,15 @@ func SchedUpdate(elm DbSched, usrUpdater int, transaction bool) error {
 	q = `INSERT INTO ` + tblPrefix + `PERIODDETAIL(periodid, idx, interval, intervalhours
 		, hours, months, weekdays, monthdays) VALUES (?,?,?,?,?,?,?,?)`
 	for i, detail := range elm.Detail {
-		_, err = MainDB.Exec(q, elm.ID, i, detail.Interval, detail.IntervalHours, detail.Hours,
+		_, err = TxExec(tx, q, elm.ID, i, detail.Interval, detail.IntervalHours, detail.Hours,
 			detail.Months, detail.WeekDays, detail.MonthDays)
 		if err != nil {
 			return fmt.Errorf("SchedUpdate err %w", err)
 		}
 	}
 
-	if transaction {
-		_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	if innertx {
+		err = tx.Commit()
 		if err != nil {
 			return fmt.Errorf("SchedUpdate err %w", err)
 		}
@@ -195,27 +196,25 @@ func SchedUpdate(elm DbSched, usrUpdater int, transaction bool) error {
 
 // SchedDelete flag sched suppression
 func SchedDelete(elmID int, usrUpdater int) error {
-	_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+	tx, err := MainDB.Begin()
 	if err != nil {
 		return fmt.Errorf("SchedDelete err %w", err)
 	}
-	defer func() {
-		MainDB.Exec(`ROLLBACK TRANSACTION`)
-	}()
+	defer tx.Rollback()
 
 	q := `DELETE FROM ` + tblPrefix + `PERIODDETAIL where periodid = ? `
-	_, err = MainDB.Exec(q, elmID)
+	_, err = TxExec(tx, q, elmID)
 	if err != nil {
 		return fmt.Errorf("SchedDelete err %w", err)
 	}
 
 	q = `DELETE FROM ` + tblPrefix + `PERIOD where id = ? `
-	_, err = MainDB.Exec(q, elmID)
+	_, err = TxExec(tx, q, elmID)
 	if err != nil {
 		return fmt.Errorf("SchedDelete err %w", err)
 	}
 
-	_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("SchedDelete err %w", err)
 	}
@@ -224,33 +223,27 @@ func SchedDelete(elmID int, usrUpdater int) error {
 
 // SchedInsert insertion sched
 func SchedInsert(elm *DbSched, usrUpdater int) error {
-	_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+	tx, err := MainDB.Begin()
 	if err != nil {
 		return fmt.Errorf("SchedInsert err %w", err)
 	}
-	defer func() {
-		MainDB.Exec(`ROLLBACK TRANSACTION`)
-	}()
+	defer tx.Rollback()
 
 	//insert base
 	q := `INSERT INTO ` + tblPrefix + `PERIOD (created_by, created_at) VALUES(?,?) `
-	res, err := MainDB.Exec(q, usrUpdater, time.Now())
-	if err != nil {
-		return fmt.Errorf("SchedInsert err %w", err)
-	}
-	id, err := res.LastInsertId()
+	id, err := TxInsert(tx, q, usrUpdater, time.Now())
 	if err != nil {
 		return fmt.Errorf("SchedInsert err %w", err)
 	}
 
 	//mj pour le reste des champs
 	elm.ID = int(id)
-	err = SchedUpdate(*elm, usrUpdater, false)
+	err = SchedUpdate(*elm, usrUpdater, false, tx)
 	if err != nil {
 		return fmt.Errorf("SchedInsert err %w", err)
 	}
 
-	_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("SchedInsert err %w", err)
 	}

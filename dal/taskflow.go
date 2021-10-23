@@ -35,8 +35,8 @@ func TaskFlowList(filter SearchQuery) ([]DbTaskFlow, PagedResponse, error) {
 	, USERC.login as loginC, TASKFLOW.created_at
 	, USERU.login as loginU, TASKFLOW.updated_at	
 	FROM ` + tblPrefix + `TASKFLOW TASKFLOW 
-	left join  ` + tblPrefix + `USER USERC on USERC.id = TASKFLOW.created_by
-	left join  ` + tblPrefix + `USER USERU on USERU.id = TASKFLOW.updated_by
+	left join  ` + tblPrefix + `USR USERC on USERC.id = TASKFLOW.created_by
+	left join  ` + tblPrefix + `USR USERU on USERU.id = TASKFLOW.updated_by
 	` + filter.GetSQLWhere()
 	q = filter.AppendPaging(q, nbRow.Int64)
 
@@ -158,22 +158,23 @@ func TaskFlowGet(id int) (DbTaskFlow, error) {
 }
 
 // TaskFlowUpdate maj taskflow
-func TaskFlowUpdate(elm DbTaskFlow, usrUpdater int, transaction bool) error {
-	if transaction {
-		_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+func TaskFlowUpdate(elm DbTaskFlow, usrUpdater int, transaction bool, tx *sql.Tx) error {
+	var err error
+	innertx := false
+	if tx == nil {
+		tx, err = MainDB.Begin()
 		if err != nil {
-			return fmt.Errorf("TaskFlowUpdate err %w", err)
+			return fmt.Errorf("SchedUpdate err %w", err)
 		}
-		defer func() {
-			MainDB.Exec(`ROLLBACK TRANSACTION`)
-		}()
+		defer tx.Rollback()
+		innertx = true
 	}
 
 	q := `UPDATE ` + tblPrefix + `TASKFLOW SET updated_by = ?, updated_at = ? 
 		, lib = ?, tags = ? , activ = ?, manuallaunch = ?
 		, scheduleid = ?, err_management = ?, queueid = ?, named_args = ?	
 		where id = ? `
-	_, err := MainDB.Exec(q, usrUpdater, time.Now(), elm.Lib, mergeIntToStr(elm.Tags),
+	_, err = TxExec(tx, q, usrUpdater, time.Now(), elm.Lib, mergeIntToStr(elm.Tags),
 		elm.Activ, elm.ManualLaunch, elm.ScheduleID, elm.ErrMngt, elm.QueueID,
 		mapToJSON(&elm.NamedArgs), elm.ID)
 	if err != nil {
@@ -182,7 +183,7 @@ func TaskFlowUpdate(elm DbTaskFlow, usrUpdater int, transaction bool) error {
 
 	//detail par delete/insert
 	q = `DELETE FROM ` + tblPrefix + `TASKFLOWDETAIL where taskflowid = ? `
-	_, err = MainDB.Exec(q, elm.ID)
+	_, err = TxExec(tx, q, elm.ID)
 	if err != nil {
 		return fmt.Errorf("TaskFlowUpdate err %w", err)
 	}
@@ -190,17 +191,17 @@ func TaskFlowUpdate(elm DbTaskFlow, usrUpdater int, transaction bool) error {
 	q = `INSERT INTO ` + tblPrefix + `TASKFLOWDETAIL(taskflowid, idx, taskid, nexttaskid_ok, nexttaskid_fail
 		, retryif_fail) VALUES (?,?,?,?,?,?)`
 	for _, detail := range elm.Detail {
-		_, err = MainDB.Exec(q, elm.ID, detail.Idx, detail.TaskID,
+		_, err = TxExec(tx, q, elm.ID, detail.Idx, detail.TaskID,
 			detail.NextTaskIDOK, detail.NextTaskIDFail, detail.RetryIfFail)
 		if err != nil {
 			return fmt.Errorf("TaskFlowUpdate err %w", err)
 		}
 	}
 
-	if transaction {
-		_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	if innertx {
+		err = tx.Commit()
 		if err != nil {
-			return fmt.Errorf("TaskFlowUpdate err %w", err)
+			return fmt.Errorf("SchedUpdate err %w", err)
 		}
 	}
 
@@ -209,27 +210,25 @@ func TaskFlowUpdate(elm DbTaskFlow, usrUpdater int, transaction bool) error {
 
 // TaskFlowDelete flag taskflow suppression
 func TaskFlowDelete(elmID int, usrUpdater int) error {
-	_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+	tx, err := MainDB.Begin()
 	if err != nil {
 		return fmt.Errorf("TaskFlowDelete err %w", err)
 	}
-	defer func() {
-		MainDB.Exec(`ROLLBACK TRANSACTION`)
-	}()
+	defer tx.Rollback()
 
 	q := `DELETE FROM ` + tblPrefix + `TASKFLOWDETAIL where taskflowid = ? `
-	_, err = MainDB.Exec(q, elmID)
+	_, err = TxExec(tx, q, elmID)
 	if err != nil {
 		return fmt.Errorf("TaskFlowDelete err %w", err)
 	}
 
 	q = `DELETE FROM ` + tblPrefix + `TASKFLOW where id = ? `
-	_, err = MainDB.Exec(q, elmID)
+	_, err = TxExec(tx, q, elmID)
 	if err != nil {
 		return fmt.Errorf("TaskFlowDelete err %w", err)
 	}
 
-	_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("TaskFlowDelete err %w", err)
 	}
@@ -239,33 +238,27 @@ func TaskFlowDelete(elmID int, usrUpdater int) error {
 
 // TaskFlowInsert insertion taskflow
 func TaskFlowInsert(elm *DbTaskFlow, usrUpdater int) error {
-	_, err := MainDB.Exec(`BEGIN TRANSACTION`)
+	tx, err := MainDB.Begin()
 	if err != nil {
 		return fmt.Errorf("TaskFlowInsert err %w", err)
 	}
-	defer func() {
-		MainDB.Exec(`ROLLBACK TRANSACTION`)
-	}()
+	defer tx.Rollback()
 
 	//insert base
 	q := `INSERT INTO ` + tblPrefix + `TASKFLOW (created_by, created_at) VALUES(?,?) `
-	res, err := MainDB.Exec(q, usrUpdater, time.Now())
-	if err != nil {
-		return fmt.Errorf("TaskFlowInsert err %w", err)
-	}
-	id, err := res.LastInsertId()
+	id, err := TxInsert(tx, q, usrUpdater, time.Now())
 	if err != nil {
 		return fmt.Errorf("TaskFlowInsert err %w", err)
 	}
 
 	//mj pour le reste des champs
 	elm.ID = int(id)
-	err = TaskFlowUpdate(*elm, usrUpdater, false)
+	err = TaskFlowUpdate(*elm, usrUpdater, false, tx)
 	if err != nil {
 		return fmt.Errorf("TaskFlowInsert err %w", err)
 	}
 
-	_, err = MainDB.Exec(`COMMIT TRANSACTION`)
+	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("TaskFlowInsert err %w", err)
 	}
@@ -277,7 +270,7 @@ func TaskFlowUpdateLastState(taskflowId int, start, stop time.Time, result int, 
 	q := `UPDATE ` + tblPrefix + `TASKFLOW SET last_start = ?, last_stop = ? 
 		, last_result = ?, last_msg = ?
 		where id = ? `
-	_, err := MainDB.Exec(q, start, stop, result, msg, taskflowId)
+	_, err := TxExec(nil, q, start, stop, result, msg, taskflowId)
 	if err != nil {
 		return fmt.Errorf("TaskFlowUpdateLastState err %w", err)
 	}

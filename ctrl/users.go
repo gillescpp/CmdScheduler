@@ -100,7 +100,7 @@ func apiUserPut(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		return
 	}
 
-	err = dal.UserUpdate(elm, getUsrIdFromCtx(r))
+	err = dal.UserUpdate(elm, getUsrIdFromCtx(r), nil)
 	if err != nil {
 		writeStdJSONErrInternalServer(w, err.Error())
 		return

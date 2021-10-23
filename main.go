@@ -33,7 +33,7 @@ func main() {
 
 	//prepa db
 	slog.Trace("main", "Starting...")
-	err = dal.InitDb(viper.GetString("db_driver"), viper.GetString("db_datasource"), viper.GetString("db_schema"))
+	err = dal.InitDb(viper.GetString("db_driver"), viper.GetString("db_datasource"), viper.GetString("db_prefix"))
 	if err != nil {
 		slog.Fatal("main", "InitDb %v", err)
 	}

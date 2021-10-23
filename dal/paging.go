@@ -88,7 +88,7 @@ func (c SearchQuery) AppendPaging(sql string, rowcount int64) string {
 
 	if strings.EqualFold(dbDriver, "mssql") {
 		// select * from <tabl>
-		// order by <>			tri imposé si utilisation de FETCH (il faut utiliser seulement OFFSET avec un TOP pour la limit dans ce cas)
+		// tri imposé si utilisation de OFFSET
 		// OFFSET 1 ROWS 		offset (0=a partir du premier, 1, du deuxieme)
 		// FETCH NEXT 3 ROWS ONLY -- row par page, order by obligatoire pour cett instruction
 		if c.SQLSort != "" {
@@ -97,8 +97,6 @@ func (c SearchQuery) AppendPaging(sql string, rowcount int64) string {
 				" FETCH NEXT " + strconv.Itoa(c.Limit) + " ROWS ONLY "
 
 			sqlReturn = sql + sqlAppend
-		} else {
-			sqlReturn = " select TOP " + strconv.Itoa(c.Limit) + " * FROM (" + sql + ") T OFFSET " + strconv.Itoa(c.Offset) + " ROWS "
 		}
 	} else {
 		// order by Sort LIMIT offset, row_count;
@@ -349,6 +347,15 @@ func NewSearchQueryFromRequest(r *http.Request, structInfo interface{}, FromForm
 			sort += " DESC"
 		} else {
 			sort += " ASC"
+		}
+	}
+	if sort == "" {
+		//tri par defaut
+		for _, f := range dbfields {
+			if f.Sortable {
+				sort = f.DbName + " ASC"
+				break
+			}
 		}
 	}
 

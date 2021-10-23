@@ -54,7 +54,7 @@ type Worker struct {
 	taskList *list.List             // liste des taches à traiter
 	taskMP   map[string]*PreparedTF // ident unic, mise en file de doublon interdit
 
-	queueState map[int]*QueueState //états des queues
+	queueState map[int]*QueueState //états des queues + directe en clé 0
 
 	lastStateInfo  map[int]WipQueueView //informatif seulement
 	lastStateCheck time.Time            //dernier maj liste
@@ -271,29 +271,42 @@ func (w *Worker) ProceedTF(tf *PreparedTF) {
 	if tf == nil || tf.Ident == "" || w.taskList == nil {
 		return
 	}
-	// tache déja en file ingoré
+	// tache déja en file ignoré
 	if _, exists := w.taskMP[tf.Ident]; exists {
 		slog.Warning("sched", "Push %v - %v skipped (already in list)", tf.TFLib, tf.Ident)
 		return
-	}
-
-	// tache déja qualifié comme non traitable
-	if tf.Result != 0 {
-		tf.State = StateTerminated
-	} else {
-		tf.State = StateNew
 	}
 
 	//ajout à la liste
 	w.tasklstMutex.Lock()
 	defer func() {
 		w.tasklstMutex.Unlock()
+		//notif worker potentiellement bloquant si chan full
+		//fait hors lock mutex pour eviter un deathlock avec la boucle de traitement
+		w.wipMsgFlkow <- wipInfo{}
 	}()
+
+	//check si la queue concerné est pleine
+	if tf.QueueID > 0 && tf.State == StateNew {
+		if q, exists := w.queueState[tf.QueueID]; exists {
+			if q.isFull() {
+				info := fmt.Sprintf("Queue %v full", q.Name)
+				tf.Result = -1
+				tf.CantLaunch = info
+				tf.ResultMsg = info
+			}
+		}
+	}
+
+	// tache déja qualifié comme non traitable : seul la persitance en db doit être faite
+	if tf.Result != 0 {
+		tf.State = StateTerminated
+	} else {
+		tf.State = StateNew
+	}
 
 	w.taskMP[tf.Ident] = tf
 	w.taskList.PushBack(tf)
-	//notif worker
-	w.wipMsgFlkow <- wipInfo{}
 }
 
 //UpdateList check liste forcé
@@ -303,19 +316,32 @@ func (w *Worker) UpdateList() {
 
 // état d'un queue
 type QueueState struct {
-	Processing  bool //tache en cours d'exec
+	Processing  int //tache en cours d'exec
 	Paused      bool
-	Size        int
+	MaxSize     int
 	Name        string
 	dtUpdated   time.Time
 	toLaunchCpt int
+
+	tmpProcessing  int //variable temporaire
+	tmpToLaunchCpt int
+}
+
+// isFull check si un queue est pleine
+func (q *QueueState) isFull() bool {
+	if q != nil && q.MaxSize > 0 {
+		if (q.toLaunchCpt + q.Processing) >= q.MaxSize {
+			return true
+		}
+	}
+	return false
 }
 
 //
 // pumpWork corp traitement de tache
 func (w *Worker) pumpWork() {
 	//init état des queues
-	w.initQueueState(true)
+	w.initQueueState()
 
 	checkTick := time.NewTicker(time.Duration(5) * time.Second)
 
@@ -336,37 +362,38 @@ func (w *Worker) pumpWork() {
 
 //
 // initQueueState init état des queues
-func (w *Worker) initQueueState(zeroCpt bool) {
+func (w *Worker) initQueueState() {
 	dtRef := time.Now()
+
+	//queue 0  = directe
+	if _, exists := w.queueState[0]; !exists {
+		w.queueState[0] = &QueueState{
+			Name: "[Direct]",
+		}
+	}
+
 	for qid, qptr := range appSched.queueLst {
 		//nouvelle queue
 		if _, exists := w.queueState[qid]; !exists {
-			w.queueState[qid] = &QueueState{
-				Processing:  false,
-				Paused:      false,
-				dtUpdated:   time.Time{},
-				toLaunchCpt: 0,
-				Size:        0,
-			}
+			w.queueState[qid] = &QueueState{}
 			slog.Trace("sched", "Init queue %v", qid)
 		}
 		w.queueState[qid].dtUpdated = dtRef
 		w.queueState[qid].Name = qptr.Lib
-		w.queueState[qid].Size = qptr.MaxSize
+		w.queueState[qid].MaxSize = qptr.MaxSize
 		//check mise en pause
 		if w.queueState[qid].Paused != qptr.PausedManual {
 			w.queueState[qid].Paused = qptr.PausedManual
 			slog.Trace("sched", "Queue %v, pause = %v", qid, qptr.PausedManual)
 		}
-		//mise à zero compteur
-		if zeroCpt {
-			w.queueState[qid].Processing = false
-			w.queueState[qid].toLaunchCpt = 0
-		}
 	}
-	//suppression de queue n'existant plus
+
+	//suppression de queue n'existant plus, et reset des cpt temporaire
 	for qid := range w.queueState {
-		if !w.queueState[qid].dtUpdated.Equal(dtRef) {
+		w.queueState[qid].tmpProcessing = 0
+		w.queueState[qid].tmpToLaunchCpt = 0
+
+		if qid != 0 && !w.queueState[qid].dtUpdated.Equal(dtRef) {
 			slog.Trace("sched", "Queue %v deleted", qid)
 			delete(w.queueState, qid)
 		}
@@ -381,29 +408,29 @@ func (w *Worker) updateTaskList() {
 		w.tasklstMutex.Unlock()
 	}()
 
-	iCptWaiting := make(map[int]int) // collectre pour dashboard
-	iCptProcessing := make(map[int]int)
-
 	//1 : relevé état des queues (tache en attente ou en cours)
-	w.initQueueState(true)
+	w.initQueueState()
+
 	for e := w.taskList.Front(); e != nil; e = e.Next() {
 		tf := e.Value.(*PreparedTF)
-		if tf.QueueID > 0 {
+
+		//si la queue a été supprimé, on détache les tf liés
+		if tf.QueueID != 0 {
 			if _, exists := w.queueState[tf.QueueID]; !exists {
-				//si la queue a été supprimé, on détache les tf liés
 				tf.QueueID = 0
 				tf.QueueLib = ""
 				if tf.State == StateQueued {
 					tf.State = StateNew
 				}
-			} else if tf.State == StateInProgress { //(en cours ou terminé encore en queue)
-				w.queueState[tf.QueueID].Processing = true
-			} else if tf.State == StateNew || tf.State == StateQueued {
-				if tf.State == StateNew {
-					tf.State = StateQueued
-					slog.Trace("sched", "Queue %v, append %v", w.queueState[tf.QueueID].Name, tf.lib())
-				}
 			}
+		}
+
+		if tf.State == StateInProgress { //(en cours ou terminé encore en queue)
+			w.queueState[tf.QueueID].tmpProcessing++
+		}
+		if tf.QueueID != 0 && tf.State == StateNew {
+			tf.State = StateQueued //toute nouvelle tache lié à queue est mise en queue
+			slog.Trace("sched", "Queue %v, append %v", w.queueState[tf.QueueID].Name, tf.lib())
 		}
 	}
 
@@ -413,29 +440,25 @@ func (w *Worker) updateTaskList() {
 		tf := e.Value.(*PreparedTF)
 
 		if tf.State == StateNew {
-			//tache à lancer, non lié à queue
+			//tache à lancer, non lié à queue puisque en StateNew
 			slog.Trace("sched", "Launching %v", tf.lib())
 			tf.start(w.wipMsgFlkow)
-			iCptProcessing[tf.QueueID]++
+			w.queueState[tf.QueueID].tmpProcessing++
 		} else if tf.State == StateQueued {
 			//check dispo queue
 			if !w.queueState[tf.QueueID].Paused {
 				//queue libre, on lance
-				if !w.queueState[tf.QueueID].Processing {
-					w.queueState[tf.QueueID].Processing = true
+				if w.queueState[tf.QueueID].tmpProcessing == 0 {
+					w.queueState[tf.QueueID].tmpProcessing++
 					slog.Trace("sched", "Queue %v, Launching %v", w.queueState[tf.QueueID].Name, tf.lib())
 					tf.start(w.wipMsgFlkow)
-					iCptProcessing[tf.QueueID]++
 				} else {
 					// on prend note du fait qu'au moins 1 tache est en attente suite à celle en cours
-					w.queueState[tf.QueueID].toLaunchCpt++
-					iCptWaiting[tf.QueueID]++
+					w.queueState[tf.QueueID].tmpToLaunchCpt++
 				}
 			} else {
-				iCptWaiting[tf.QueueID]++
+				w.queueState[tf.QueueID].tmpToLaunchCpt++
 			}
-		} else if tf.State == StateInProgress {
-			iCptProcessing[tf.QueueID]++
 		}
 
 		//tache terminé ou passé en terminé dans cette meme boucle
@@ -444,9 +467,9 @@ func (w *Worker) updateTaskList() {
 			if tf.CantLaunch != "" {
 				slog.Warning("sched", "Skipped %v : %v", tf.lib(), tf.CantLaunch)
 			} else {
-				if tf.QueueID > 0 {
+				if tf.QueueID != 0 {
 					slog.Trace("sched", "Terminated %v : %v", w.queueState[tf.QueueID].Name, tf.lib())
-					//la place s'est libéré
+					//une place s'est libéré
 					forceRefresh = true
 				} else {
 					slog.Trace("sched", "Terminated %v", tf.lib())
@@ -464,28 +487,23 @@ func (w *Worker) updateTaskList() {
 
 	// bilan queue
 	newStateView := make(map[int]WipQueueView)
-	newStateView[0] = WipQueueView{
-		ID:         0,
-		Lib:        "direct",
-		Paused:     false,
-		Waiting:    iCptWaiting[0],
-		Processing: iCptProcessing[0],
-		Size:       0,
-	}
-
-	// si une place s'est liberé dans un queue,on lance le prochain
 	for qid := range w.queueState {
+		w.queueState[qid].Processing = w.queueState[qid].tmpProcessing
+		w.queueState[qid].toLaunchCpt = w.queueState[qid].tmpToLaunchCpt
+
 		newStateView[qid] = WipQueueView{
 			ID:         qid,
 			Lib:        w.queueState[qid].Name,
 			Paused:     w.queueState[qid].Paused,
-			Waiting:    iCptWaiting[qid],
-			Processing: iCptProcessing[qid],
-			Size:       w.queueState[qid].Size,
+			Waiting:    w.queueState[qid].toLaunchCpt,
+			Processing: w.queueState[qid].Processing,
+			Size:       w.queueState[qid].MaxSize,
 		}
 	}
 	w.lastStateInfo = newStateView
 	w.lastStateCheck = time.Now()
+
+	// si une place s'est liberé dans un queue, on lance un nouveau check
 	if forceRefresh {
 		w.wipMsgFlkow <- wipInfo{}
 	}
