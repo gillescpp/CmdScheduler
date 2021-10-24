@@ -460,7 +460,7 @@ type DbSched struct {
 //               (1er lundi du mois, 2eme mardi du mois, 1e j du mois, dernier j du mois) ou "*" pour tous
 // Toutes les dates heures sont dans la tz fourni à la création
 type DbSchedDetail struct {
-	Interval      int    `json:"interval,omitempty" dbfield:"PERIODDETAIL.interval"`
+	Interval      int    `json:"interval" dbfield:"PERIODDETAIL.interval"`
 	IntervalHours string `json:"intervalhours,omitempty" dbfield:"PERIODDETAIL.intervalhours"`
 	Hours         string `json:"hours,omitempty" dbfield:"PERIODDETAIL.hours"`
 	Months        string `json:"months" dbfield:"PERIODDETAIL.months"`

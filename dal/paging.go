@@ -164,7 +164,7 @@ func NewSearchQueryFromRequest(r *http.Request, structInfo interface{}, FromForm
 		//tri par defaut
 		sort := ""
 		for _, f := range dbfields {
-			if f.Sortable {
+			if f.Sortable && strings.HasSuffix(f.DbName, ".id") {
 				sort = f.DbName + " ASC"
 				break
 			}
@@ -361,7 +361,7 @@ func NewSearchQueryFromRequest(r *http.Request, structInfo interface{}, FromForm
 	if sort == "" {
 		//tri par defaut
 		for _, f := range dbfields {
-			if f.Sortable {
+			if f.Sortable && strings.HasSuffix(f.DbName, ".id") {
 				sort = f.DbName + " ASC"
 				break
 			}
