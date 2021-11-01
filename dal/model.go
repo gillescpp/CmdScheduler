@@ -312,6 +312,7 @@ func (c *DbTag) Validate(Create bool) error {
 type DbQueue struct {
 	ID          int    `json:"id" apiuse:"search,sort" dbfield:"QUEUE.id"`
 	Lib         string `json:"lib" apiuse:"search,sort" dbfield:"QUEUE.lib"`
+	Slot        int    `json:"slot" apiuse:"search,sort" dbfield:"QUEUE.slot"` // execution parrale
 	MaxSize     int    `json:"size" apiuse:"search,sort" dbfield:"QUEUE.size"` // taille de fil max
 	MaxDuration int    `json:"timeout" dbfield:"QUEUE.timeout"`                // en ms
 
@@ -337,6 +338,12 @@ func (c *DbQueue) Validate(Create bool) error {
 	}
 	if c.MaxSize < 0 {
 		c.MaxSize = 0
+	}
+	if c.Slot < 1 {
+		c.Slot = 1
+	}
+	if c.MaxSize > 0 && c.Slot > c.MaxSize {
+		c.Slot = c.MaxSize
 	}
 	if c.MaxDuration < 0 {
 		c.MaxDuration = 0

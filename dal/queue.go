@@ -26,7 +26,7 @@ func QueueList(filter SearchQuery) ([]DbQueue, PagedResponse, error) {
 	pagedResp = NewPagedResponse(arr, filter, int(nbRow.Int64))
 
 	// listing
-	q := ` SELECT QUEUE.id, QUEUE.lib, QUEUE.size, QUEUE.timeout, QUEUE.pausedfrom 
+	q := ` SELECT QUEUE.id, QUEUE.lib, QUEUE.size, QUEUE.slot, QUEUE.timeout, QUEUE.pausedfrom 
 		, QUEUE.noexecwhile_queuelist
 		, USERC.login as loginC, QUEUE.created_at
 		, USERU.login as loginU, QUEUE.updated_at
@@ -45,6 +45,7 @@ func QueueList(filter SearchQuery) ([]DbQueue, PagedResponse, error) {
 		id         int
 		lib        sql.NullString
 		size       sql.NullInt64
+		slot       sql.NullInt64
 		timeout    sql.NullInt64
 		pausedFrom sql.NullTime
 		noexecQL   sql.NullString
@@ -54,14 +55,18 @@ func QueueList(filter SearchQuery) ([]DbQueue, PagedResponse, error) {
 		loginU     sql.NullString
 	)
 	for rows.Next() {
-		err = rows.Scan(&id, &lib, &size, &timeout, &pausedFrom, &noexecQL, &loginC, &createdAt, &loginU, &updatedAt)
+		err = rows.Scan(&id, &lib, &size, &slot, &timeout, &pausedFrom, &noexecQL, &loginC, &createdAt, &loginU, &updatedAt)
 		if err != nil {
 			return nil, pagedResp, fmt.Errorf("QueueList scan %w", err)
+		}
+		if slot.Int64 <= 0 {
+			slot.Int64 = 1
 		}
 		arr = append(arr, DbQueue{
 			ID:               id,
 			Lib:              lib.String,
 			MaxSize:          int(size.Int64),
+			Slot:             int(slot.Int64),
 			MaxDuration:      int(timeout.Int64),
 			PausedManual:     pausedFrom.Valid && !pausedFrom.Time.IsZero(),
 			PausedManualFrom: pausedFrom.Time,
@@ -104,9 +109,9 @@ func QueueUpdate(elm DbQueue, usrUpdater int, admin bool, tx *sql.Tx) error {
 	}
 	q := `UPDATE ` + tblPrefix + `QUEUE SET
 		updated_by = ?, updated_at = ? 
-		, lib = ?, size = ?, timeout = ?, pausedfrom= ?, noexecwhile_queuelist = ?
+		, lib = ?, size = ?, slot = ?, timeout = ?, pausedfrom= ?, noexecwhile_queuelist = ?
 		where id = ? `
-	_, err := TxExec(tx, q, usrUpdater, time.Now(), elm.Lib, elm.MaxSize, elm.MaxDuration,
+	_, err := TxExec(tx, q, usrUpdater, time.Now(), elm.Lib, elm.MaxSize, elm.Slot, elm.MaxDuration,
 		pausedfrom, mergeIntToStr(elm.NoExecWhile), elm.ID)
 	if err != nil {
 		return fmt.Errorf("QueueUpdate err %w", err)

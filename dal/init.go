@@ -308,6 +308,12 @@ func initDbTables() error {
 		return fmt.Errorf("initDbTables %v %w", iv, err)
 	}
 
+	//ajout notion de slot sur les queues
+	sql = `ALTER TABLE ` + tblPrefix + `QUEUE ADD slot int`
+	if iv, err = (iv + 1), versionedDML(iv, &curVersion, sql); err != nil {
+		return fmt.Errorf("initDbTables %v %w", iv, err)
+	}
+
 	//tache en cours
 	sql = `CREATE TABLE ` + tblPrefix + `WIP (
 		id INTEGER PRIMARY KEY,

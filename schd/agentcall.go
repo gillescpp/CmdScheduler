@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,7 +16,6 @@ import (
 // proceedTaskFlow execute le task flows
 // et la tache en cours d'exec devrait pouvoir notifier chacune leur avancement)
 func (c *PreparedTF) proceedTaskFlow(feedback chan<- wipInfo) {
-	c.StartAt = time.Now()
 	transcript := make([]string, 0)
 
 	nextIdxToExec := 1 //idx commence à 1 en bdd
@@ -38,6 +38,13 @@ func (c *PreparedTF) proceedTaskFlow(feedback chan<- wipInfo) {
 			for waitFor {
 				//appel demande exec
 				if !exec {
+					//spec tache de test : pas d'action reel
+					if c.Detail[nextIdxB0].Task.Type == "none" {
+						time.Sleep(time.Duration(100+rand.Intn(900)) * time.Millisecond)
+						transcript = append(transcript, fmt.Sprintf("Task idx %v terminated (TEST)", nextIdxToExec))
+						break
+					}
+					//appel agent
 					execErr := c.Detail[nextIdxB0].agentQueryExec(c)
 					if execErr != nil {
 						currentExecErr = fmt.Errorf("error query agent : %v", execErr)
@@ -99,7 +106,6 @@ func (c *PreparedTF) proceedTaskFlow(feedback chan<- wipInfo) {
 		c.Result = -1
 	}
 	c.ResultMsg = strings.Join(transcript, "\n")
-	c.StopAt = time.Now()
 }
 
 // calcArgs calcule les args de la tache en prenant en compte les eventuels arguments nommés de la tf

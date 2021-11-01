@@ -16,11 +16,10 @@ const (
 // instance globale du scheduler
 var appSched scheduleurState
 
-// WipView info taches en cours
+// WipView info taches en cours : info worker + taches à venir
 type WipView struct {
-	NextTask []string             `json:"next_task"`
-	Queues   map[int]WipQueueView `json:"queues"`
-	Tasks    []WipTaskView        `json:"tasks"`
+	WState
+	NextTask []TState `json:"next_task"`
 }
 
 // represente le plannficateur de tache : il garde en mémoire
@@ -49,6 +48,7 @@ type scheduleurState struct {
 	checkTick       *time.Ticker
 	nextLaunchs     *nextExec
 	nextRefreshCalc time.Time //date de rajout de calcules/rajout des prochaines dates
+	lastNextTask    []TState  //info prochaines taches à venir pour consultations
 
 	//chan de pilotage
 	checkDbCh      chan chNotifyChange //demande maj from db tache x ou 0 pour tout
@@ -169,29 +169,47 @@ func GetViewState() WipView {
 
 	//état des queues & taches
 	if appSched.worker != nil {
-		state.Queues = appSched.worker.lastQueueStateInfo
-		state.Tasks = appSched.worker.lastTaskStateInfo
+		state.WState = appSched.worker.GetLastState()
 	}
 
+	// prochaines tache à exec
+	state.NextTask = appSched.lastNextTask
+	return state
+}
+
+//calcViewNextState calcul un état des prochaines exec à à mener pour affichage
+func calcViewNextState() {
 	// prochaines tache à exec : il faut trier par date
-	state.NextTask = make([]string, 0)
+	appSched.lastNextTask = make([]TState, 0)
 	dtList := make([]time.Time, 0)
 	for dt := range appSched.nextLaunchs.grpSchedsToLaunch {
 		dtList = append(dtList, dt)
 	}
 	sort.Slice(dtList, func(i, j int) bool { return dtList[i].Before(dtList[j]) })
 
-	//puis les date sont associé à ou plusieurs schedid, lié à un ou plusieurs tf
-	for idt := 0; (idt < len(dtList)) && (len(state.NextTask) < 30); idt++ { //liste 30 max pour le dash
+	//puis les dates sont associés à ou plusieurs schedid, lié à un ou plusieurs tf
+	for idt := 0; (idt < len(dtList)) && (len(appSched.lastNextTask) < 30); idt++ { //liste 30 max pour le dash
 		if arr, exists := appSched.nextLaunchs.grpSchedsToLaunch[dtList[idt]]; exists {
 			for _, schedid := range arr {
-				for _, tf := range appSched.schedToTF[schedid] {
-					state.NextTask = append(state.NextTask, fmt.Sprintf("%v : %v", dtList[idt], appSched.taskflowsLst[tf].Lib))
+				for _, tfidx := range appSched.schedToTF[schedid] {
+					qlib := ""
+					tf := appSched.taskflowsLst[tfidx]
+					if _, exists := appSched.queueLst[tf.QueueID]; exists {
+						qlib = appSched.queueLst[tf.QueueID].Lib
+					}
+
+					appSched.lastNextTask = append(appSched.lastNextTask, TState{
+						TFID:     tf.ID,
+						TFLib:    tf.Lib,
+						QueueID:  tf.QueueID,
+						QueueLib: qlib,
+						Success:  false,
+						DtRef:    dtList[idt],
+					})
 				}
 			}
 		}
 	}
-	return state
 }
 
 // pumpSched est la boucle principale de gestion des taches
@@ -209,18 +227,15 @@ func pumpSched() {
 	appSched.terminatedCh = make(chan bool)
 
 	appSched.nextLaunchs = newNextExec()
-
-	appSched.worker = NewWorker()
-
 	appSched.schdFrom = time.Now()
+	appSched.lastNextTask = make([]TState, 0)
 
 	// init entités en mémoire
 	updateEntitiesFromDb("*", 0)
 
-	// lancement routine de lancement des taches
-	go func() {
-		appSched.worker.pumpWork()
-	}()
+	//init worker
+	appSched.worker = NewWorker(appSched.queueLst)
+	appSched.worker.Start()
 
 	//1er calcul plannif
 	calcNextLaunch()
@@ -240,15 +255,16 @@ func pumpSched() {
 				calcNextLaunch()
 			} else if e.dType == "DbQueue" {
 				//changement état qu'une queue peut affecter le worker (état pause)
-				appSched.worker.UpdateList()
+				for _, q := range appSched.queueLst {
+					appSched.worker.UpdateQueue(*q)
+				}
 			}
 		case <-appSched.stopRequestCh:
 			//arret du scheduleur
 			slog.Trace("sched", "Scheduler stopping...")
 			appSched.checkTick.Stop()
 			//arret des traitement en cours, avec période de grace de 6s
-			appSched.worker.abort = true
-			for i := 0; i < 30 && appSched.worker.on; i++ {
+			for i := 0; i < 30 && appSched.worker.Activ(); i++ {
 				time.Sleep(time.Millisecond * 200)
 			}
 
@@ -259,6 +275,7 @@ func pumpSched() {
 		case ct := <-appSched.checkTick.C:
 			appSched.memMutex.Lock()
 			mpSchedId := appSched.nextLaunchs.popSchedIdBefore(ct)
+			calcViewNextState()
 			appSched.memMutex.Unlock()
 			if len(mpSchedId) > 0 {
 				//Lancement des taches planifiés associés
@@ -483,6 +500,9 @@ func calcNextLaunch() {
 			}
 		}
 	}
+
+	//maj valeurs calculés
+	calcViewNextState()
 }
 
 //launchTFBySchedId lancement tache active associé à un schedid
@@ -490,7 +510,7 @@ func launchTFBySchedId(schedid int, dtRef time.Time) {
 	for _, tf := range appSched.schedToTF[schedid] {
 		ptf := prepareTF(appSched.taskflowsLst[tf], fmt.Sprintf("Schedule ID %v", schedid), dtRef, false)
 		slog.Trace("sched", "Scheduler %v, push taskflow %v", schedid, ptf.Ident)
-		appSched.worker.ProceedTF(ptf)
+		appSched.worker.AppendTF(*ptf)
 	}
 }
 
@@ -499,6 +519,6 @@ func ManualLaunchTF(tfID int, usr string) {
 	if _, exists := appSched.taskflowsLst[tfID]; exists {
 		ptf := prepareTF(appSched.taskflowsLst[tfID], fmt.Sprintf("Manual launch by %v", usr), time.Now(), true)
 		slog.Trace("api", "push taskflow %v by %v", ptf.Ident, usr)
-		appSched.worker.ProceedTF(ptf)
+		appSched.worker.AppendTF(*ptf)
 	}
 }
